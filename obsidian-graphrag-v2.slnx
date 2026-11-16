@@ -1,0 +1,5 @@
+<Solution>
+  <Project Path="obsidian-graphrag-v2.Shared/obsidian-graphrag-v2.Shared.csproj" />
+  <Project Path="obsidian-graphrag-v2.Web/obsidian-graphrag-v2.Web.csproj" />
+  <Project Path="obsidian-graphrag-v2/obsidian-graphrag-v2.csproj" />
+</Solution>

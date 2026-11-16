@@ -1,0 +1,107 @@
+@page "/"
+@page "/dashboard"
+@namespace ObsidianGraphRag.Shared.Pages
+
+<div class="dashboard-container">
+    <!-- Header -->
+    <div class="header-section">
+        <div>
+            <h1 class="page-title">Knowledge Bases Overview</h1>
+            <p class="page-subtitle">Multi-site GraphRAG knowledge base</p>
+        </div>
+        <div class="header-metrics">
+            <div class="metric-badge">
+                <span class="@(GraphEngine.IsConnected ? "dot-green" : "dot-red")"></span>
+                <span>@(GraphEngine.IsConnected ? "Storage Connected" : "Storage Unavailable")</span>
+            </div>
+            <div class="metric-badge">
+                <span>Indexed Notes: @GraphEngine.Notes.Count</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Vault Connection & Location Info Bar -->
+    <div class="vault-info-banner">
+        <div class="vault-path-info">
+            <span class="banner-icon">📂</span>
+            <span class="banner-label">Knowledge Storage</span>
+            <code class="vault-path-code">@GraphEngine.RootPath</code>
+        </div>
+        <div class="vault-banner-actions">
+            <button class="btn-vault-refresh" @onclick="RefreshVault">
+                🔄 Reload Notes
+            </button>
+        </div>
+    </div>
+
+    <!-- Cards Grid (Level 1 Multi-Site Dashboard) -->
+    @if (sites.Count == 0)
+    {
+        <div class="empty-state-card">
+            <h3>📭 No Crawled Sites Found</h3>
+            <p>No Markdown directories found in <code class="vault-path-code">@Path.Combine(GraphEngine.RootPath, "raw")</code>.</p>
+            <p>Run the n8n Crawl4AI workflow to add a website.</p>
+        </div>
+    }
+    else
+    {
+        <div class="site-grid">
+            @foreach (var site in sites)
+            {
+                <div class="site-card">
+                    <div class="card-header">
+                        <div>
+                            <h3 class="site-name">@(site.SiteName == DocumentImportService.Collection ? "Uploaded documents" : site.SiteName)</h3>
+                            @if (!string.IsNullOrEmpty(site.BaseUrl))
+                            {
+                                <a href="@site.BaseUrl" target="_blank" class="site-url">@site.BaseUrl ↗</a>
+                            }
+                        </div>
+                        <span class="status-tag @(site.SyncStatus == "Synced" ? "tag-synced" : "tag-pending")">
+                            @site.SyncStatus
+                        </span>
+                    </div>
+
+                    <!-- Mini Glowing Graph Thumbnail -->
+                    <div class="mini-graph-preview" @onclick="() => NavigateToSite(site.SiteName)">
+                        <div class="preview-node node-1"></div>
+                        <div class="preview-node node-2"></div>
+                        <div class="preview-node node-3"></div>
+                        <div class="preview-node node-4"></div>
+                        <div class="preview-edge edge-1"></div>
+                        <div class="preview-edge edge-2"></div>
+                        <div class="preview-edge edge-3"></div>
+                        <div class="graph-center-label">
+                            <span>@site.EntityCount Entities</span> • <span>@site.ConceptCount Concepts</span>
+                        </div>
+                    </div>
+
+                    <div class="card-stats">
+                        <div class="stat-item">
+                            <span class="stat-num">@site.RawDocCount</span>
+                            <span class="stat-label">Raw Docs</span>
+                        </div>
+                        <div class="stat-item">
+                            <span class="stat-num">@site.WikiSourceCount</span>
+                            <span class="stat-label">Wiki Sources</span>
+                        </div>
+                        <div class="stat-item">
+                            <span class="stat-num">@site.HealthScore%</span>
+                            <span class="stat-label">Health</span>
+                        </div>
+                    </div>
+
+                    <div class="card-actions">
+                        <button class="btn-primary btn-card-main" @onclick="() => NavigateToSite(site.SiteName)">
+                            <span>Knowledge Graph</span>
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+                        </button>
+                        <button class="btn-secondary btn-card-icon" title="Sync / Compile Knowledge Base" @onclick="() => NavigateToIngest(site.SiteName)">
+                            📥 Ingest
+                        </button>
+                    </div>
+                </div>
+            }
+        </div>
+    }
+</div>

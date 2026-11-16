@@ -1,0 +1,226 @@
+@page "/ingest"
+@namespace ObsidianGraphRag.Shared.Pages
+@using Microsoft.AspNetCore.Components.Forms
+
+<PageTitle>Knowledge Ingest | GraphRAG Portal</PageTitle>
+
+<div class="ingest-container">
+    <header class="ingest-hero">
+        <div>
+            <h1>Knowledge Ingest</h1>
+            <p>Upload a document or crawl a website, then choose what to process into your knowledge graph.</p>
+        </div>
+        <dl class="source-counts" aria-label="Available sources">
+            <div><dt>Uploaded documents</dt><dd>@uploadedDocuments.Count</dd></div>
+            <div><dt>Crawled websites</dt><dd>@availableSites.Count</dd></div>
+        </dl>
+    </header>
+
+    <section aria-labelledby="add-sources-title">
+        <div class="section-heading">
+            <span class="step" aria-hidden="true">1</span>
+            <h2 id="add-sources-title">Add content</h2>
+        </div>
+
+        <div class="source-grid">
+            @if (DocumentImport.IsConfigured)
+            {
+                <section class="ingest-card source-card" aria-labelledby="document-import-title">
+                    <div class="card-heading">
+                        <span class="source-icon document-icon" aria-hidden="true"><i></i></span>
+                        <div>
+                            <h3 id="document-import-title">Upload a document</h3>
+                            <p>Convert a file to Markdown.</p>
+                        </div>
+                    </div>
+                    <div class="file-picker @(IsBusy ? "is-disabled" : "")">
+                        <InputFile @key="uploadInputVersion" OnChange="SelectDocument" accept="@DocumentImportService.AcceptedExtensions"
+                                   disabled="@IsBusy" aria-label="Choose a document" aria-describedby="document-import-formats" />
+                        <span class="file-picker-icon" aria-hidden="true">↑</span>
+                        <span class="file-picker-text">
+                            <strong>@(document?.Name ?? "Choose or drop a file")</strong>
+                            <small id="document-import-formats">PDF, Word, Excel, PowerPoint or image · Up to 20 MB</small>
+                        </span>
+                    </div>
+                    <div class="source-footer">
+                        <button class="secondary-action" type="button" @onclick="ImportDocument" disabled="@(IsBusy || document is null)">
+                            @(isImportingDocument ? "Converting…" : "Convert and import")
+                        </button>
+                    </div>
+                    @if (documentImportStatus is not null)
+                    {
+                        <div role="status" class="source-status @(documentImportSucceeded ? "success" : "warning")">@documentImportStatus</div>
+                    }
+                </section>
+            }
+
+            <section class="ingest-card source-card" aria-labelledby="website-crawl-title">
+                <div class="card-heading">
+                    <span class="source-icon website-icon" aria-hidden="true"><i></i></span>
+                    <div>
+                        <h3 id="website-crawl-title">Crawl a website</h3>
+                        <p>Collect pages from a website.</p>
+                    </div>
+                    <span class="status-chip @(isN8nOnline == true ? "positive" : "")">
+                        @(isN8nOnline switch { true => "Crawler online", false => "Crawler offline", null => "Checking crawler…" })
+                    </span>
+                </div>
+                <div class="website-field">
+                    <label for="ingest-website">Website URL</label>
+                    <input id="ingest-website" type="url" class="source-control" @bind="targetWebsiteInput" @bind:event="oninput"
+                           placeholder="https://example.com" disabled="@IsBusy" aria-describedby="website-url-help"
+                           aria-invalid="@(!string.IsNullOrWhiteSpace(targetWebsiteInput) && !HasValidUrl ? "true" : null)" />
+                    <span id="website-url-help" class="field-help">
+                        @if (!string.IsNullOrWhiteSpace(targetWebsiteInput) && !HasValidUrl)
+                        {
+                            <span class="validation-message">Enter an address starting with https:// or http://.</span>
+                        }
+                    </span>
+                </div>
+                <div class="source-footer">
+                    <button class="secondary-action" type="button" @onclick="TriggerN8nCrawl" disabled="@(IsBusy || !HasValidUrl)">
+                        @(N8nService.IsBusy ? "Starting…" : "Start crawl")
+                    </button>
+                </div>
+                @if (crawlStatusMessage is not null)
+                {
+                    <div role="status" class="source-status @(crawlIsSuccess ? "success" : "warning")">@crawlStatusMessage</div>
+                }
+            </section>
+        </div>
+    </section>
+
+    <div class="work-grid">
+        <section aria-labelledby="ingest-target-title">
+            <div class="section-heading">
+                <span class="step" aria-hidden="true">2</span>
+                <h2 id="ingest-target-title">Run ingestion</h2>
+            </div>
+            <div class="ingest-card settings-card">
+                <div class="target-heading">
+                    <label for="ingest-source">Source to ingest</label>
+                    <button class="text-action" type="button" @onclick="RefreshSources" disabled="@IsBusy">
+                        <span aria-hidden="true">↻</span> Refresh sources
+                    </button>
+                </div>
+                <select id="ingest-source" class="source-control" @bind="selectedTarget" disabled="@IsBusy"
+                        aria-describedby="target-help">
+                    <option value="">Choose a source</option>
+                    @if (hasDocuments)
+                    {
+                        <optgroup label="Uploaded documents">
+                            @foreach (var file in uploadedDocuments)
+                            {
+                                <option value="@(DocumentPrefix + file.Id)">@DocumentLabel(file)</option>
+                            }
+                            <option value="@AllDocuments">All uploaded documents</option>
+                        </optgroup>
+                    }
+                    @if (availableSites.Count > 0)
+                    {
+                        <optgroup label="Websites">
+                            @foreach (var site in availableSites)
+                            {
+                                <option value="@(WebsitePrefix + site)">@site</option>
+                            }
+                        </optgroup>
+                    }
+                </select>
+                <p id="target-help" class="field-help">
+                    @(hasDocuments || availableSites.Count > 0
+                        ? "Choose an individual file, all uploaded documents, or a website."
+                        : "Upload a document or finish a website crawl to add a source.")
+                </p>
+
+                <fieldset class="mode-field" disabled="@IsBusy">
+                    <legend>Processing mode</legend>
+                    <InputRadioGroup @bind-Value="reprocess">
+                        <label class="mode-choice @(!reprocess ? "is-selected" : "")">
+                            <InputRadio Value="false" />
+                            <span><strong>New and changed content</strong><small>Skip sections that are already up to date.</small></span>
+                        </label>
+                        <label class="mode-choice @(reprocess ? "is-selected" : "")">
+                            <InputRadio Value="true" />
+                            <span><strong>Reprocess entire source</strong><small>Run extraction again for every section.</small></span>
+                        </label>
+                    </InputRadioGroup>
+                </fieldset>
+
+                <div class="ingest-action">
+                    <span class="action-target">@(SelectedLabel ?? "Select a source to continue")</span>
+                    <button class="run-action" type="button" @onclick="RunIngestion" disabled="@(IsBusy || SelectedSite is null)">
+                        @(IngestEngine.CurrentJob.IsRunning ? "Ingesting…" : "Run ingestion") <span aria-hidden="true">→</span>
+                    </button>
+                </div>
+            </div>
+        </section>
+
+        @{
+            var job = IngestEngine.CurrentJob;
+            var hasRun = !string.IsNullOrEmpty(job.TargetName);
+            var completed = !job.IsRunning && job.CurrentStepDescription == "Completed";
+        }
+        <section aria-labelledby="ingest-activity-title">
+            <div class="section-heading activity-heading">
+                <h2 id="ingest-activity-title">Ingestion activity</h2>
+            </div>
+            <div class="ingest-card activity-card">
+                @if (hasRun)
+                {
+                    <div class="job-summary" role="status">
+                        <span class="status-chip @(completed ? "positive" : job.IsRunning ? "working" : "attention")">
+                            @(job.IsRunning ? "In progress" : job.CurrentStepDescription)
+                        </span>
+                        <h3>@job.TargetName</h3>
+                        <p>@(job.Reprocess ? "Reprocess entire source" : "New and changed content")</p>
+                    </div>
+                    @if (job.TotalFiles > 0)
+                    {
+                        <div class="progress-header">
+                            <span>Markdown sections checked</span>
+                            <strong>@job.ProcessedFiles / @job.TotalFiles</strong>
+                        </div>
+                        <progress class="ingest-progress" aria-label="Markdown sections checked" value="@job.ProcessedFiles" max="@job.TotalFiles"></progress>
+                        <dl class="metrics-row">
+                            <div><dt>Compiled or updated</dt><dd>@job.UpdatedFiles</dd></div>
+                            <div><dt>Unchanged</dt><dd>@job.UnchangedFiles</dd></div>
+                            <div><dt>Entities created</dt><dd>@job.NewEntitiesCreated</dd></div>
+                            <div><dt>Concepts created</dt><dd>@job.NewConceptsCreated</dd></div>
+                        </dl>
+                    }
+                    @if (!completed && !job.IsRunning && job.CurrentStepDescription == "Stopped before completion")
+                    {
+                        <p class="source-status warning">
+                            @if (job.FailedSection is { } failedSection)
+                            {
+                                <strong>Section to retry</strong>
+                                <span class="failed-section">@failedSection</span>
+                            }
+                            <span>Fix the issue shown in the logs, then run this source with <strong>New and changed content</strong> to resume.</span>
+                        </p>
+                    }
+                    <details @key="job" class="activity-logs" open="@(!completed && !job.IsRunning)">
+                        <summary>Ingestion logs</summary>
+                        <div class="console-body" tabindex="0" aria-label="Ingestion logs">
+                            @foreach (var log in job.Logs)
+                            {
+                                <div class="log-line @log.Level.ToLowerInvariant()">
+                                    <span class="log-time">@log.Timestamp.ToString("HH:mm:ss")</span>
+                                    <span>@log.Message</span>
+                                </div>
+                            }
+                        </div>
+                    </details>
+                }
+                else
+                {
+                    <div class="activity-empty">
+                        <span class="source-icon activity-icon" aria-hidden="true"><i></i></span>
+                        <h3>No recent ingestion</h3>
+                        <p>Start an ingestion run to see progress, results, and logs here.</p>
+                    </div>
+                }
+            </div>
+        </section>
+    </div>
+</div>

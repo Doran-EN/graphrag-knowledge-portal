@@ -1,0 +1,52 @@
+name: obsidian-graphrag
+
+services:
+  web:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${GRAPHRAG_WEB_PORT:-18082}:8080"
+    environment:
+      ASPNETCORE_HTTP_PORTS: "8080;8081"
+      KnowledgeStorage__RootPath: /knowledge
+      CrawlStorage__Port: 8081
+      Docling__BaseUrl: http://docling:5001
+      N8n__BaseUrl: http://n8n:5678
+      N8n__WebhookPath: /webhook/graphrag-private-crawl
+      Ollama__BaseUrl: ${GRAPHRAG_OLLAMA_URL:-http://host.docker.internal:11434}
+      Ollama__DefaultModel: ${GRAPHRAG_OLLAMA_MODEL:-qwen3.5:4b}
+      Ollama__RequestTimeoutSeconds: ${GRAPHRAG_OLLAMA_TIMEOUT_SECONDS:-180}
+    volumes:
+      - knowledge-data:/knowledge
+
+  n8n:
+    image: n8nio/n8n:latest
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${GRAPHRAG_N8N_PORT:-15679}:5678"
+    environment:
+      N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS: "true"
+      N8N_SSRF_PROTECTION_ENABLED: "true"
+      N8N_SSRF_ALLOWED_HOSTNAMES: "web,crawl4ai"
+      N8N_EDITOR_BASE_URL: http://localhost:${GRAPHRAG_N8N_PORT:-15679}/
+      WEBHOOK_URL: http://localhost:${GRAPHRAG_N8N_PORT:-15679}/
+    volumes:
+      - n8n-data:/home/node/.n8n
+      - ./n8n/Crawl4AI_Markdown_Obsidian_Universal_Ingest.json:/workflows/website-ingest.json:ro
+
+  crawl4ai:
+    image: unclecode/crawl4ai:latest
+    restart: unless-stopped
+    shm_size: 1gb
+    environment:
+      CRAWL4AI_API_TOKEN: ${CRAWL4AI_API_TOKEN:?Generate CRAWL4AI_API_TOKEN in .env before starting the stack}
+
+  docling:
+    image: ghcr.io/docling-project/docling-serve@sha256:21bec2f460ab8a6162f720b39bfe1b79809c271151d9958c2d33655f3e5e7e62
+    restart: unless-stopped
+    environment:
+      DOCLING_SERVE_ARTIFACTS_PATH: /opt/app-root/src/.cache/docling/models
+
+volumes:
+  n8n-data:
+  knowledge-data:

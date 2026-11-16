@@ -1,0 +1,90 @@
+@page "/lint"
+@namespace ObsidianGraphRag.Shared.Pages
+
+<div class="lint-container">
+    <div class="header-section">
+        <div>
+            <h1 class="page-title">🩺 Wiki Health & Auto-Fix Center</h1>
+            <p class="page-subtitle">Static Topo Lint & Semantic Auditor based on Karpathy LLM-Wiki</p>
+        </div>
+        <div>
+            <button class="btn-primary" @onclick="RunHealthCheck">
+                🔍 Run Full Health Check
+            </button>
+        </div>
+    </div>
+
+    <!-- Health Score Gauge -->
+    <div class="health-banner">
+        <div class="score-circle">
+            <span class="score-number">@report.HealthScore</span>
+            <span class="score-label">Health Score</span>
+        </div>
+        <div class="health-breakdown">
+            <h3>Knowledge Base Vital Stats</h3>
+            <div class="vital-grid">
+                <div class="vital-item">
+                    <span class="v-num @(report.UnlinkedMentionsCount > 0 ? "warn" : "")">@report.UnlinkedMentionsCount</span>
+                    <span class="v-label">Unlinked Mentions</span>
+                </div>
+                <div class="vital-item">
+                    <span class="v-num @(report.OrphanPagesCount > 0 ? "warn" : "")">@report.OrphanPagesCount</span>
+                    <span class="v-label">Orphan Nodes</span>
+                </div>
+                <div class="vital-item">
+                    <span class="v-num @(report.BrokenLinksCount > 0 ? "warn" : "")">@report.BrokenLinksCount</span>
+                    <span class="v-label">Broken Links</span>
+                </div>
+                <div class="vital-item">
+                    <span class="v-num">@report.TotalNotesChecked</span>
+                    <span class="v-label">Notes Audited</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Issues List & Auto-Fix -->
+    <div class="issues-section">
+        <h2 class="section-title">Detected Issues & Action Recommendations (@report.Issues.Count)</h2>
+
+        @if (report.TotalNotesChecked == 0)
+        {
+            <div class="empty-card">
+                <p>No notes to check yet. Add a website in Knowledge Ingest.</p>
+            </div>
+        }
+        else if (report.Issues.Count == 0)
+        {
+            <div class="empty-card">
+                <p>🎉 Excellent! Your Wiki graph is healthy with zero broken links or unlinked mentions.</p>
+            </div>
+        }
+        else
+        {
+            <div class="issue-list">
+                @foreach (var issue in report.Issues)
+                {
+                    <div class="issue-card @(issue.IsFixed ? "fixed" : "")">
+                        <div class="issue-content">
+                            <span class="issue-tag @issue.Type.ToString().ToLower()">@issue.Type</span>
+                            <h4 class="issue-title">@issue.Title</h4>
+                            <p class="issue-desc">@issue.Description</p>
+                        </div>
+                        <div class="issue-action">
+                            @if (issue.IsFixed)
+                            {
+                                <span class="badge-fixed">✓ Fixed</span>
+                            }
+                            else if (issue.CanAutoFix)
+                            {
+                                <button class="btn-fix" @onclick="() => FixIssue(issue)">
+                                    ⚡ @issue.AutoFixActionName
+                                </button>
+                            }
+                        </div>
+                    </div>
+                }
+            </div>
+        }
+    </div>
+</div>

@@ -1,0 +1,13 @@
+@using Microsoft.AspNetCore.Components.Authorization
+@using ObsidianGraphRag.Shared
+
+<AuthorizeView>
+    <Authorized>
+        <CascadingValue Name="ShowPortalAccount" Value="true" IsFixed="true">
+            <Routes />
+        </CascadingValue>
+    </Authorized>
+    <NotAuthorized>
+        <a href="/account/sign-in" data-enhance-nav="false">Sign in to your workspace</a>
+    </NotAuthorized>
+</AuthorizeView>

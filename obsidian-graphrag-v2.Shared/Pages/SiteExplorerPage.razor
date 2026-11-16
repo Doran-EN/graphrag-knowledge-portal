@@ -1,0 +1,218 @@
+@page "/explorer"
+@page "/explorer/{SiteName}"
+@namespace ObsidianGraphRag.Shared.Pages
+
+<div class="explorer-layout">
+    <!-- Left Panel: File & Folder Tree with Quick Filter -->
+    <div class="sidebar-tree">
+        <div class="tree-header">
+            <div class="tree-title-row">
+                <h3>📁 Knowledge Explorer</h3>
+                <button class="btn-icon" title="Reload Notes" @onclick="ReloadGraph">🔄</button>
+            </div>
+            <div class="scope-selector-container">
+                <select class="scope-select" value="@currentScope" @onchange="(e) => ChangeScope(e.Value?.ToString() ?? currentScope)">
+                    <option value="all">🌐 All Websites (全网知识库)</option>
+                    @foreach (var s in availableSites)
+                    {
+                        <option value="@s">🌐 @s</option>
+                    }
+                </select>
+            </div>
+            <div class="search-box">
+                <input type="text" placeholder="🔍 Search notes or files..." 
+                       @bind="searchTerm" @bind:event="oninput" @onkeyup="FilterTreeAndGraph" />
+            </div>
+        </div>
+        <div class="tree-content">
+            @if (rootTreeNode != null)
+            {
+                <div class="tree-root">
+                    @foreach (var folder in rootTreeNode.Children)
+                    {
+                        <div class="tree-folder">
+                            <div class="folder-title" @onclick="() => ToggleFolder(folder)">
+                                <span class="folder-icon">@(folder.IsExpanded ? "📂" : "📁")</span>
+                                <span class="folder-name">@folder.Name (@folder.Children.Count)</span>
+                            </div>
+                            @if (folder.IsExpanded)
+                            {
+                                <div class="folder-items">
+                                    @foreach (var file in folder.Children.Where(f => string.IsNullOrEmpty(searchTerm) || f.Name.Contains(searchTerm, StringComparison.OrdinalIgnoreCase)))
+                                    {
+                                        <div class="tree-file @(selectedNoteKey == file.Path.ToLower() ? "active" : "")"
+                                             @onclick="() => SelectFileAndFlyToGraph(file.Path)">
+                                            <span class="file-icon">📄</span>
+                                            <span class="file-title">@file.Name</span>
+                                        </div>
+                                    }
+                                </div>
+                            }
+                        </div>
+                    }
+                </div>
+            }
+        </div>
+    </div>
+
+    <!-- Center/Right Area: Dynamic Force-Directed Canvas + Interactive Control Bar -->
+    <div class="graph-canvas-container">
+        <!-- Top Toolbar -->
+        <div class="graph-toolbar-interactive">
+            <div class="toolbar-left">
+                <!-- Color mode: grayscale, note type, or website -->
+                <div class="color-mode-group">
+                    <button class="mode-pill @(colorMode == "gray" ? "active" : "")" @onclick='() => SetColorMode("gray")'>
+                        🌑 Grayscale
+                    </button>
+                    <button class="mode-pill @(colorMode == "type" ? "active" : "")" @onclick='() => SetColorMode("type")'>
+                        🏷️ By Note Type
+                    </button>
+                    <button class="mode-pill @(colorMode == "group" ? "active" : "")" @onclick='() => SetColorMode("group")'>
+                        🌐 By Website
+                    </button>
+                </div>
+
+                @if (colorMode == "type")
+                {
+                    <div class="type-filter-chips">
+                        <button class="filter-chip @(filterEntities ? "active-green" : "")" @onclick="ToggleEntityFilter">
+                            🟢 Entities
+                        </button>
+                        <button class="filter-chip @(filterConcepts ? "active-purple" : "")" @onclick="ToggleConceptFilter">
+                            🟣 Concepts
+                        </button>
+                        <button class="filter-chip @(filterSources ? "active-blue" : "")" @onclick="ToggleSourceFilter">
+                            🔵 Sources
+                        </button>
+                        <button class="filter-chip @(filterRaw ? "active-sky" : "")" @onclick="ToggleRawFilter">
+                            🔷 Raw Docs
+                        </button>
+                    </div>
+                }
+            </div>
+
+            <div class="toolbar-right">
+                <!-- Drag physics toggle -->
+                <button class="btn-glass" title="Fit Entire Graph in View" @onclick="ResetViewAsync">
+                    🎯 Fit View
+                </button>
+                <button class="btn-glass @(pinOnDrag ? "active-pin" : "")" 
+                        title="Toggle Elastic Drag vs Pin on Drag" @onclick="TogglePinOnDrag">
+                    @(pinOnDrag ? "📌 Pin on Drag: ON" : "🧲 Elastic Drag: ON")
+                </button>
+                <button class="btn-glass" title="Release all pinned nodes" @onclick="UnpinAllNodes">
+                    🔓 Unpin All
+                </button>
+                <button class="btn-glass" @onclick="TogglePhysicsPanel">
+                    ⚙️ Physics
+                </button>
+                <button class="btn-glass" @onclick="ReHeatGraph">
+                    ⚡ Re-heat
+                </button>
+            </div>
+        </div>
+
+        <!-- Group Legend Bar (When By Website / Group is active) -->
+        @if (colorMode == "group" && currentGroups.Count > 0)
+        {
+            <div class="group-legend-overlay">
+                <span class="legend-label">Color Groups:</span>
+                <div class="legend-chips-scroll">
+                    @foreach (var g in currentGroups)
+                    {
+                        var isFiltered = activeGroupFilter == g.Name;
+                        <button class="group-legend-chip @(isFiltered ? "chip-active" : "")"
+                                @onclick="() => ToggleGroupFilter(g.Name)">
+                            <span class="color-dot" style="background-color: @g.Color;"></span>
+                            <span class="group-name">@g.Name</span>
+                            <span class="group-count">@g.NodeCount</span>
+                        </button>
+                    }
+                    @if (activeGroupFilter != "all")
+                    {
+                        <button class="btn-reset-filter" @onclick='() => ToggleGroupFilter("all")'>
+                            ✕ Show All
+                        </button>
+                    }
+                </div>
+            </div>
+        }
+
+        <!-- Live Physics Tuning Panel (Sliders) -->
+        @if (showPhysicsPanel)
+        {
+            <div class="physics-tuning-popover">
+                <div class="popover-header">
+                    <span>🎛️ Force Physics Tuning</span>
+                    <button class="btn-close-sm" @onclick="() => showPhysicsPanel = false">✕</button>
+                </div>
+                <div class="slider-group">
+                    <label>Repulsion (排斥力): @repulsionForce</label>
+                    <input type="range" min="-300" max="-30" step="10" 
+                           @bind="repulsionForce" @bind:event="oninput" @onchange="ApplyPhysicsSettings" />
+                </div>
+                <div class="slider-group">
+                    <label>Link Distance (弹簧间距): @linkDistance px</label>
+                    <input type="range" min="30" max="180" step="5" 
+                           @bind="linkDistance" @bind:event="oninput" @onchange="ApplyPhysicsSettings" />
+                </div>
+                <div class="slider-group">
+                    <label>Center Gravity (向心力): @gravityForce</label>
+                    <input type="range" min="0.02" max="0.4" step="0.02" 
+                           @bind="gravityForce" @bind:event="oninput" @onchange="ApplyPhysicsSettings" />
+                </div>
+                <div class="popover-hint">
+                    💡 Drag a node to move its neighbors. Double-click a node to <b>pin 📌</b> it in place.
+                </div>
+            </div>
+        }
+
+        <!-- Canvas Container -->
+        <div id="hyper-graph-container" class="cytoscape-canvas"></div>
+
+        <!-- Floating Detail Drawer if selected -->
+        @if (selectedNote != null)
+        {
+            <div class="node-detail-drawer">
+                <div class="drawer-header">
+                    <div>
+                        <div class="drawer-badges">
+                            @if (!string.IsNullOrEmpty(selectedNoteGroup))
+                            {
+                                <span class="badge-group" style="background-color: @(GetGroupColor(selectedNoteGroup))25; color: @GetGroupColor(selectedNoteGroup); border: 1px solid @(GetGroupColor(selectedNoteGroup))55;">
+                                    🌐 @selectedNoteGroup
+                                </span>
+                            }
+                            <span class="badge-type">@selectedNote.NoteType.ToUpper()</span>
+                        </div>
+                        <h3 class="drawer-title">@selectedNote.Title</h3>
+                    </div>
+                    <button class="btn-close" @onclick="DeselectNodeAndResetFocusAsync" title="Close Details & Reset Focus (Esc)">✕</button>
+                </div>
+                <div class="drawer-body">
+                    <div class="drawer-stat-row">
+                        <span>Out Links: @selectedNote.OutgoingLinks.Count</span>
+                        <span>In Links: @selectedNote.IncomingLinks.Count</span>
+                        <span>Relative: @selectedNote.RelativePath</span>
+                    </div>
+
+                    @if (!string.IsNullOrEmpty(selectedNote.Summary))
+                    {
+                        <div class="drawer-section">
+                            <span class="section-label">Summary:</span>
+                            <p class="summary-text">@selectedNote.Summary</p>
+                        </div>
+                    }
+
+                    <div class="drawer-section">
+                        <span class="section-label">Markdown Content:</span>
+                        <div class="markdown-preview">
+                            <pre><code>@selectedNote.Content</code></pre>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        }
+    </div>
+</div>

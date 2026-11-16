@@ -1,0 +1,24 @@
+@inherits LayoutComponentBase
+
+<div class="app-shell">
+    <div class="app-sidebar">
+        <div class="brand-header">
+            <span class="brand-icon">🔮</span>
+            <span class="brand-title">GraphRAG Portal</span>
+        </div>
+        <NavMenu />
+        @if (ShowPortalAccount)
+        {
+            <a class="nav-link-custom" href="/account/manage" data-enhance-nav="false">Your account</a>
+        }
+    </div>
+
+    <div class="app-content">
+        @Body
+    </div>
+</div>
+
+@code {
+    [CascadingParameter(Name = "ShowPortalAccount")]
+    public bool ShowPortalAccount { get; set; }
+}

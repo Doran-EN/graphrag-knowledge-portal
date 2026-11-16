@@ -1,0 +1,898 @@
+{
+  "id": "qKS1mphr2bRdHXPW",
+  "name": "Crawl4AI Markdown - Universal Ingest",
+  "description": null,
+  "active": false,
+  "activeVersionId": null,
+  "createdAt": "2026-08-26T06:05:47.922Z",
+  "updatedAt": "2026-09-07T09:54:55.498Z",
+  "isArchived": false,
+  "versionId": "bac4a7f2-1bc9-4dbb-8e07-1d211c43fa11",
+  "versionCounter": 67,
+  "sourceWorkflowId": null,
+  "triggerCount": 0,
+  "nodes": [
+    {
+      "parameters": {
+        "jsCode": "const match = $json.url.match(/^(https?:\\/\\/)([^\\/]+)/i);\nif (!match || !$json.site) throw new Error('Invalid portal crawl');\nconst origin = match[1] + match[2];\nreturn [{ json: {\n  targetUrl: origin,\n  targetHostname: match[2].toLowerCase().replace(/:(80|443)$/, ''),\n  siteName: $json.site,\n  excludePaths: [],\n  recheckIntervalHours: 168,\n  autoDeleteStale: true,\n  robotsUrl: origin + '/robots.txt',\n  sitemapUrl: origin + '/sitemap.xml'\n} }];"
+      },
+      "id": "workflow-config-node",
+      "name": "⚙️ Workflow Config (修改网站入口)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        384,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{ $('⚙️ Workflow Config (修改网站入口)').first().json.robotsUrl }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "text"
+            }
+          }
+        }
+      },
+      "id": "fetch-robots-node",
+      "name": "Fetch robots.txt",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        608,
+        192
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "url": "={{ $('⚙️ Workflow Config (修改网站入口)').first().json.targetUrl }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "text"
+            }
+          }
+        }
+      },
+      "id": "fetch-homepage-probe-node",
+      "name": "Fetch Homepage (First-Level Discovery)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        608,
+        -96
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $input.first().json.data || '';\nconst lines = raw.split('\\n');\n\nconst groups = [];\nlet currentGroup = null;\n\nfor (let line of lines) {\n  line = line.replace(/#.*$/, '').trim();\n  if (!line) continue;\n\n  const colonIdx = line.indexOf(':');\n  if (colonIdx === -1) continue;\n\n  const directive = line.substring(0, colonIdx).trim().toLowerCase();\n  const value = line.substring(colonIdx + 1).trim();\n\n  if (directive === 'user-agent') {\n    const agent = value.toLowerCase();\n    if (!currentGroup || currentGroup.hasRules) {\n      currentGroup = { agents: [], rules: [], hasRules: false };\n      groups.push(currentGroup);\n    }\n    currentGroup.agents.push(agent);\n  } else if (currentGroup && (directive === 'disallow' || directive === 'allow')) {\n    currentGroup.hasRules = true;\n    if (!value) {\n      if (directive === 'disallow') {\n        currentGroup.rules = [];\n      }\n      continue;\n    }\n\n    const hasEndAnchor = value.endsWith('$');\n    const cleanVal = hasEndAnchor ? value.slice(0, -1) : value;\n\n    let regexStr = cleanVal\n      .replace(/[.+?^${}()|[\\]\\\\]/g, '\\\\$&')\n      .replace(/\\*/g, '.*');\n\n    regexStr = '^' + regexStr + (hasEndAnchor ? '$' : '.*');\n\n    currentGroup.rules.push({\n      type: directive,\n      path: value,\n      pattern: regexStr,\n      length: value.length\n    });\n  }\n}\n\n// 匹配优先级：优先专属 agent (crawl4ai)，若无则降级匹配通配符 *\nlet selectedGroup = groups.find(g => g.agents.includes('crawl4ai'));\nif (!selectedGroup) {\n  selectedGroup = groups.find(g => g.agents.includes('*'));\n}\n\nconst effectiveRules = selectedGroup ? selectedGroup.rules : [];\n\nreturn [{\n  json: {\n    rawRobots: raw,\n    rules: effectiveRules,\n    disallowRegexes: effectiveRules.filter(r => r.type === 'disallow').map(r => r.pattern)\n  }\n}];\n"
+      },
+      "id": "parse-robots-node",
+      "name": "Parse robots.txt Rules",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        832,
+        192
+      ]
+    },
+    {
+      "parameters": {
+        "url": "=http://web:8081/internal/crawl/raw/{{ $('⚙️ Workflow Config (修改网站入口)').first().json.siteName }}/_crawl_index.json",
+        "options": {},
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-GraphRag-Crawl",
+              "value": "={{ $('Webhook (Crawl Trigger)').first().json.body.crawlToken }}"
+            }
+          ]
+        }
+      },
+      "id": "fetch-crawl-index-node",
+      "name": "Fetch Crawl Index",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        608,
+        64
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "url": "={{ $('⚙️ Workflow Config (修改网站入口)').first().json.sitemapUrl }}",
+        "options": {}
+      },
+      "id": "fetch-sitemap-index-node",
+      "name": "Fetch sitemap.xml",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        608,
+        432
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "id": "xml-to-json-sitemap-index",
+      "name": "XML to JSON (Index)",
+      "alwaysOutputData": true,
+      "type": "n8n-nodes-base.xml",
+      "typeVersion": 1,
+      "position": [
+        832,
+        432
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// 解析 SitemapIndex，提取所有子 Sitemap URL，并附加主页作为保底种子\nconst config = $('⚙️ Workflow Config (修改网站入口)').first().json;\nconst data = $input.first().json;\nconst subSitemaps = [];\nconst seedUrls = [config.targetUrl];\n\nif (data.sitemapindex && data.sitemapindex.sitemap) {\n  const sitemaps = Array.isArray(data.sitemapindex.sitemap) \n    ? data.sitemapindex.sitemap \n    : [data.sitemapindex.sitemap];\n    \n  for (const item of sitemaps) {\n    if (item.loc) subSitemaps.push(item.loc);\n  }\n} else if (data.urlset && data.urlset.url) {\n  const urls = Array.isArray(data.urlset.url) ? data.urlset.url : [data.urlset.url];\n  for (const item of urls) {\n    if (item.loc) seedUrls.push(item.loc);\n  }\n}\n\n// 如果没有子 Sitemap，则直接返回原始 sitemapUrl\nif (subSitemaps.length === 0) {\n  subSitemaps.push(config.sitemapUrl);\n}\n\nreturn subSitemaps.map(url => ({ json: { sitemapUrl: url, seedUrls } }));"
+      },
+      "id": "extract-subsitemaps-node",
+      "name": "Extract Sub-Sitemaps",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1040,
+        432
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.sitemapUrl }}",
+        "options": {}
+      },
+      "id": "fetch-child-sitemap-node",
+      "name": "Fetch Child Sitemap",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1264,
+        432
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "id": "xml-to-json-child-sitemap",
+      "name": "XML to JSON (Child)",
+      "alwaysOutputData": true,
+      "type": "n8n-nodes-base.xml",
+      "typeVersion": 1,
+      "position": [
+        1488,
+        432
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// =========================================================================\n// 全局统一 URL 规范化函数 (Single Canonicalization Engine)\n// =========================================================================\nfunction normalizeUrl(raw, baseUrl) {\n  if (!raw) return '';\n  let href = raw.trim();\n  if (href.startsWith('javascript:') || href.startsWith('mailto:') || href.startsWith('tel:')) return '';\n\n  let full = '';\n  try {\n    if (href.startsWith('http://') || href.startsWith('https://')) {\n      full = href;\n    } else if (href.startsWith('//')) {\n      full = 'https:' + href;\n    } else if (href.startsWith('/')) {\n      full = baseUrl.replace(/\\/+$/, '') + href;\n    } else {\n      full = baseUrl.replace(/\\/+$/, '') + '/' + href;\n    }\n\n    const match = full.match(/^(https?:\\/\\/)([^\\/]+)(\\/[^?#]*)?(\\?[^#]*)?(#.*)?$/i);\n    if (!match) return '';\n\n    let scheme = match[1].toLowerCase();\n    let host = match[2].toLowerCase().replace(/:(80|443)$/, '');\n    let path = (match[3] || '/').replace(/\\/+/g, '/');\n    let search = match[4] || '';\n\n    // 解析去除 ./ 与 ../\n    const segments = [];\n    for (const seg of path.split('/')) {\n      if (seg === '' || seg === '.') continue;\n      if (seg === '..') {\n        if (segments.length > 0) segments.pop();\n      } else {\n        segments.push(seg);\n      }\n    }\n    let cleanPath = '/' + segments.join('/');\n    if (cleanPath.length > 1 && cleanPath.endsWith('/')) {\n      cleanPath = cleanPath.slice(0, -1);\n    }\n\n    // 剔除常见营销追踪参数\n    if (search) {\n      const parts = search.substring(1).split('&');\n      const filtered = [];\n      for (const p of parts) {\n        const k = p.split('=')[0];\n        if (!/^utm_|^fbclid$|^gclid$|^_ga$|^ref$/i.test(k)) {\n          filtered.push(p);\n        }\n      }\n      search = filtered.length > 0 ? ('?' + filtered.join('&')) : '';\n    }\n\n    return scheme + host + cleanPath + search;\n  } catch (e) {\n    return '';\n  }\n}\n\n// 严格同源/子域名判断（彻底杜绝 evilasterspring.com.sg 穿透漏洞）\nfunction isAllowedHost(host, target) {\n  if (!host || !target) return false;\n  host = host.toLowerCase().replace(/:(80|443)$/, '');\n  target = target.toLowerCase().replace(/:(80|443)$/, '');\n  return host === target || host.endsWith('.' + target);\n}\n\nconst config = $('⚙️ Workflow Config (修改网站入口)').first().json;\nconst targetHostname = config.targetHostname;\nconst baseUrl = config.targetUrl;\n\nconst allUrls = [{ url: baseUrl.replace(/\\/+$/, ''), lastmod: null, sourceOrigin: 'seed_homepage' }];\n\nlet sitemapCount = 0;\nfor (const item of $input.all()) {\n  const data = item.json;\n  if (data.urlset && data.urlset.url) {\n    const urlList = Array.isArray(data.urlset.url) ? data.urlset.url : [data.urlset.url];\n    for (const u of urlList) {\n      if (u.loc) {\n        const norm = normalizeUrl(u.loc, baseUrl);\n        if (norm) {\n          const uHost = norm.match(/^https?:\\/\\/([^\\/]+)/i)?.[1];\n          if (isAllowedHost(uHost, targetHostname)) {\n            sitemapCount++;\n            allUrls.push({\n              url: norm,\n              lastmod: u.lastmod ? u.lastmod.trim() : null,\n              sourceOrigin: 'sitemap'\n            });\n          }\n        }\n      }\n    }\n  }\n}\n\n// 提取首页一阶内链 (Homepage Level-1 Link Discovery)\nlet homepageHtml = '';\nlet probeCount = 0;\ntry {\n  const probeData = $('Fetch Homepage (First-Level Discovery)').first()?.json;\n  homepageHtml = probeData?.data || probeData?.body || '';\n} catch (e) {\n  homepageHtml = '';\n}\n\nif (homepageHtml) {\n  const regex = /href\\s*=\\s*[\"']([^\"'#\\s>]+)[\"']/gi;\n  let match;\n  while ((match = regex.exec(homepageHtml)) !== null) {\n    const rawHref = match[1].trim();\n    const norm = normalizeUrl(rawHref, baseUrl);\n    if (!norm) continue;\n\n    // 静态文件与系统保留字过滤\n    if (/\\.(png|jpg|jpeg|gif|svg|webp|pdf|zip|mp4|css|js|woff|woff2|ico|xml|rss|atom|json|txt)$/i.test(norm)) continue;\n    if (/blog-feed|sitemap|robots\\.txt/i.test(norm)) continue;\n\n    const uHost = norm.match(/^https?:\\/\\/([^\\/]+)/i)?.[1];\n    if (isAllowedHost(uHost, targetHostname)) {\n      probeCount++;\n      allUrls.push({ url: norm, lastmod: null, sourceOrigin: 'homepage_probe' });\n    }\n  }\n}\n\n// 智能聚合去重\nconst urlMap = new Map();\nconst duplicateMap = new Map();\n\nfor (const item of allUrls) {\n  if (!item.url) continue;\n  const canonical = item.url;\n  const existing = urlMap.get(canonical);\n\n  if (!existing) {\n    urlMap.set(canonical, {\n      url: canonical,\n      lastmod: item.lastmod,\n      sourceOrigin: item.sourceOrigin\n    });\n  } else {\n    let dupRecord = duplicateMap.get(canonical);\n    if (!dupRecord) {\n      dupRecord = {\n        canonicalUrl: canonical,\n        occurrences: 1,\n        sources: [existing.sourceOrigin]\n      };\n      duplicateMap.set(canonical, dupRecord);\n    }\n    dupRecord.occurrences++;\n    if (!dupRecord.sources.includes(item.sourceOrigin)) {\n      dupRecord.sources.push(item.sourceOrigin);\n    }\n    if (item.lastmod && (!existing.lastmod || item.lastmod > existing.lastmod)) {\n      existing.lastmod = item.lastmod;\n    }\n  }\n}\n\nconst duplicateLinks = Array.from(duplicateMap.values()).map(d => ({\n  canonicalUrl: d.canonicalUrl,\n  occurrences: d.occurrences,\n  sources: d.sources,\n  reason: `Discovered ${d.occurrences} times across [${d.sources.join(', ')}]; merged into canonical identity`\n}));\n\nconst discovery = { duplicateLinks, sitemapCount, probeCount,\n  rawDiscoveredCount: allUrls.length, uniquePagesCount: urlMap.size };\nreturn Array.from(urlMap.values()).map(item => ({ json: { ...item, discovery } }));\n"
+      },
+      "id": "extract-all-urls-node",
+      "name": "Extract All Sitemap URLs",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1712,
+        432
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "function isAllowedHost(host, target) {\n  if (!host || !target) return false;\n  host = host.toLowerCase().replace(/:(80|443)$/, '');\n  target = target.toLowerCase().replace(/:(80|443)$/, '');\n  return host === target || host.endsWith('.' + target);\n}\n\nconst config = $('⚙️ Workflow Config (修改网站入口)').first().json;\nconst targetHostname = config.targetHostname;\nconst robotsNodeData = $('Parse robots.txt Rules').first()?.json || {};\nconst robotsRules = robotsNodeData.rules || robotsNodeData.disallowRegexes || [];\nconst userExcludePaths = config.excludePaths || [];\nconst recheckIntervalHours = config.recheckIntervalHours || 168; // 默认7天\n\nlet crawlIndex = {};\ntry {\n  const rawIndex = $('Fetch Crawl Index').first()?.json;\n  if (rawIndex && typeof rawIndex === 'object' && !rawIndex.error && !rawIndex.statusCode) {\n    for (const [k, v] of Object.entries(rawIndex)) {\n      crawlIndex[k.replace(/\\/+$/, '')] = v;\n    }\n  }\n} catch (e) {\n  crawlIndex = {};\n}\n\nconst incomingItems = $input.all();\nconst validUrls = [];\nconst seenUrlsInBatch = new Set();\nconst redirectsFiltered = [];\nconst blockedByRobots = [];\nconst blockedStatic = [];\nconst unchangedSkipped = [];\nconst discoveredUrlSet = new Set();\n\n\nfor (const item of incomingItems) {\n  const rawUrl = (item.json.url || '').trim().replace(/\\/+$/, '');\n  const lastmod = item.json.lastmod || null;\n  if (!rawUrl) continue;\n\n  try {\n    const match = rawUrl.match(/^https?:\\/\\/([^\\/\\?]+)(\\/[^\\?]*)?(\\?.*)?$/i);\n    if (!match) continue;\n\n    const hostname = (match[1] || '').toLowerCase().replace(/:(80|443)$/, '');\n    const pathname = match[2] || '/';\n    const search = match[3] || '';\n\n    // 1. 严格域名限制 (Strict Domain Boundary)\n    if (!isAllowedHost(hostname, targetHostname)) continue;\n\n    // 2. 静态与系统资源过滤\n    if (/\\.(png|jpg|jpeg|gif|svg|webp|pdf|zip|mp4|css|js|woff|woff2|ico|xml|rss|atom|json|txt)$/i.test(pathname)) continue;\n    if (/blog-feed|sitemap|robots\\.txt/i.test(pathname)) continue;\n\n    // 3. 用户自定义路径黑名单 (Config 动态输入，零硬编码)\n    let isUserExcluded = false;\n    for (const pattern of userExcludePaths) {\n      if (!pattern) continue;\n      if (pathname.includes(pattern) || new RegExp(pattern, 'i').test(pathname)) {\n        redirectsFiltered.push({\n          url: rawUrl,\n          reason: `Matched user exclude pattern: \"${pattern}\"`\n        });\n        isUserExcluded = true;\n        break;\n      }\n    }\n    if (isUserExcluded) continue;\n\n    // 4. 网关即时去重\n    if (seenUrlsInBatch.has(rawUrl)) continue;\n    seenUrlsInBatch.add(rawUrl);\n    discoveredUrlSet.add(rawUrl);\n\n    // 5. robots.txt RFC 9309 规范判定 (特异度最长规则优先，等长 Allow 优先)\n    const pathAndQuery = pathname + search;\n    let bestMatch = null;\n\n    for (const rule of robotsRules) {\n      const pattern = typeof rule === 'string' ? rule : rule.pattern;\n      const type = typeof rule === 'string' ? 'disallow' : rule.type;\n      const len = typeof rule === 'string' ? pattern.length : (rule.length || 0);\n\n      try {\n        if (new RegExp(pattern).test(pathAndQuery)) {\n          if (!bestMatch || len > bestMatch.len) {\n            bestMatch = { type, len, pattern };\n          } else if (len === bestMatch.len && type === 'allow') {\n            bestMatch = { type, len, pattern };\n          }\n        }\n      } catch (e) {}\n    }\n\n    if (bestMatch && bestMatch.type === 'disallow') {\n      blockedByRobots.push({ url: rawUrl, reason: `Disallowed by robots.txt rule: \"${bestMatch.pattern}\"` });\n      continue;\n    }\n\n    // 6. 【三级增量决策体系 (Three-Tier Incremental Engine)】\n    const indexedInfo = crawlIndex[rawUrl];\n    let shouldCrawl = true;\n    let skipReason = '';\n\n    if (indexedInfo && indexedInfo.fileName && indexedInfo.hash) {\n      if (lastmod && indexedInfo.lastmod) {\n        if (lastmod <= indexedInfo.lastmod) {\n          shouldCrawl = false;\n          skipReason = `Sitemap lastmod unchanged (${lastmod} <= ${indexedInfo.lastmod})`;\n        }\n      } else {\n        const lastCrawlMs = indexedInfo.lastCrawlTime ? new Date(indexedInfo.lastCrawlTime).getTime() : 0;\n        const hoursPassed = (Date.now() - lastCrawlMs) / (1000 * 60 * 60);\n        if (hoursPassed < recheckIntervalHours) {\n          shouldCrawl = false;\n          skipReason = `No lastmod provided; crawled ${Math.round(hoursPassed)}h ago (within ${recheckIntervalHours}h verification TTL)`;\n        } else {\n          shouldCrawl = true;\n        }\n      }\n    }\n\n    if (!shouldCrawl) {\n      unchangedSkipped.push({\n        url: rawUrl,\n        lastmod: lastmod,\n        indexedLastmod: indexedInfo?.lastmod,\n        reason: skipReason\n      });\n      continue;\n    }\n\n    validUrls.push({\n      url: rawUrl,\n      lastmod: lastmod,\n      hostname: hostname,\n      pathname: pathname,\n      isRecheck: !!(indexedInfo && indexedInfo.hash)\n    });\n  } catch (err) {}\n}\n\n// 7. 【线上删除页面探查 (Stale Webpage Detection)】\nconst staleUrls = [];\nfor (const [indexedUrl, info] of Object.entries(crawlIndex)) {\n  if (info && info.status !== 'deleted' && !discoveredUrlSet.has(indexedUrl)) {\n    staleUrls.push({\n      url: indexedUrl,\n      fileName: info.fileName,\n      reason: 'Page no longer discovered in sitemap or homepage links'\n    });\n  }\n}\n\nreturn [{\n  json: {\n    hasUrls: validUrls.length > 0,\n    urlsToCrawlCount: validUrls.length,\n    validUrls: validUrls,\n    staleUrlsCount: staleUrls.length,\n    staleUrls: staleUrls,\n    diagnostics: { ...incomingItems[0]?.json.discovery, redirectsFiltered, unchangedSkipped,\n      staleUrls, blockedByRobots, blockedStatic }\n  }\n}];\n"
+      },
+      "id": "gateway-filter-node",
+      "name": "Robots.txt & Gateway Filter",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1920,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "batchSize": 5,
+        "options": {}
+      },
+      "id": "split-in-batches-node",
+      "name": "Split In Batches (5 URLs)",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        2480,
+        208
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://crawl4ai:11235/crawl",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\n  urls: [$json.url],\n  priority: 10,\n  crawler_config: {\n    excluded_tags: ['nav', 'footer', 'header', 'aside', 'noscript', 'form', 'dialog'],\n    remove_forms: true,\n    remove_overlay_elements: true,\n    remove_consent_popups: true,\n    excluded_selector: '[role=dialog], [role=alertdialog], .modal, .popup, .drawer, .cart-drawer',\n    exclude_external_links: false,\n    exclude_social_media_links: false,\n    exclude_all_images: false,\n    exclude_external_images: false,\n    wait_for_images: true\n  }\n}) }}",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "crawl4ai-request-node",
+      "name": "Crawl4AI (/crawl)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2848,
+        208
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// 纯 JS 确定性 Hash 函数\nfunction generateContentHash(str) {\n  let h1 = 0xdeadbeef, h2 = 0x41c6ce57;\n  for (let i = 0; i < str.length; i++) {\n    const ch = str.charCodeAt(i);\n    h1 = Math.imul(h1 ^ ch, 2654435761);\n    h2 = Math.imul(h2 ^ ch, 1597334677);\n  }\n  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507);\n  h1 ^= Math.imul(h2 ^ (h2 >>> 13), 3266489909);\n  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507);\n  h2 ^= Math.imul(h1 ^ (h1 >>> 13), 3266489909);\n  return (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(16).padStart(12, '0');\n}\n\n// 【URL is Identity: 基于标准 URL 对象生成永久稳定的文件名】\nfunction generateStableFileName(siteName, rawUrl) {\n  let pathname = '';\n  let search = '';\n  try {\n    const u = new URL(rawUrl);\n    pathname = u.pathname || '';\n    search = u.search || '';\n  } catch (e) {\n    try {\n      const parts = rawUrl.replace(/^https?:\\/\\/[^\\/]+/, '').split('?');\n      pathname = parts[0] || '';\n      search = parts[1] ? ('?' + parts[1]) : '';\n    } catch (e2) {\n      pathname = '';\n    }\n  }\n\n  let slug = pathname.replace(/^\\/+|\\/+$/g, '').replace(/[^a-zA-Z0-9_-]/g, '-').trim();\n  if (!slug) slug = 'index';\n  if (search) {\n    const q = search.replace(/[^a-zA-Z0-9_-]/g, '-').substring(0, 30);\n    slug = slug + q;\n  }\n  if (slug.length > 80) slug = slug.substring(0, 80);\n  return `raw/${siteName}/${slug}.md`;\n}\n\n// 【通用动态内容降噪与去重算法 (Dynamic & Content-Agnostic Cleaner)】\n// 彻底剔除任何特定网站的硬编码文本匹配，完全基于标准语义标签、链接密度与信息论启发式算法\nfunction cleanMarkdownDynamically(md) {\n  if (!md || typeof md !== 'string') return '';\n\n  // 1. 动态剥离页内锚点跳转链接 (负向后行断言 (?<!\\!) 确保绝不破坏图片 ![] 语法)\n  md = md.replace(/(?<!\\!)\\[[^\\]]*\\]\\([^)]*#[^)]*\\)/gi, '');\n\n  // 2. 动态剥离空文本链接 (负向后行断言 (?<!\\!) 确保无 alt 的 Markdown 图片 ![](url) 完好保留)\n  md = md.replace(/(?<!\\!)\\[\\s*\\]\\([^)]*\\)/gi, '');\n\n  // 3. 动态链接密度剪枝算法 (Link Density Filter - 浏览器阅读模式核心算法)\n  // 核心原理：正文的链接密度通常 < 0.25；而分类目录、导航菜单、标签云的链接密度 > 0.65\n  const lines = md.split('\\n');\n  const cleanedLines = [];\n  let i = 0;\n\n  while (i < lines.length) {\n    const line = lines[i];\n    // 探测 Markdown 列表项起始 (*, -, +)\n    if (/^\\s*[\\*\\-\\+]\\s+/.test(line)) {\n      const listBlock = [];\n      while (i < lines.length && (/^\\s*[\\*\\-\\+]\\s+/.test(lines[i]) || (lines[i].trim() && lines[i].startsWith('  ')))) {\n        listBlock.push(lines[i]);\n        i++;\n      }\n      // 计算当前列表块的 Link Density\n      const blockText = listBlock.join(' ');\n      const totalLen = blockText.trim().length;\n      const links = blockText.match(/\\[([^\\]]*)\\]\\([^)]*\\)/g) || [];\n\n      let linkTextLen = 0;\n      for (const link of links) {\n        const m = link.match(/\\[([^\\]]*)\\]/);\n        if (m && m[1]) linkTextLen += m[1].length;\n      }\n\n      const linkDensity = totalLen > 0 ? (linkTextLen / totalLen) : 0;\n\n      // 如果列表包含 3 个以上链接且链接字符占比超过 65%，判定为高密度导航/目录块，动态剔除\n      if (links.length >= 3 && linkDensity > 0.65) {\n        continue;\n      } else {\n        cleanedLines.push(...listBlock);\n        continue;\n      }\n    } else {\n      cleanedLines.push(line);\n      i++;\n    }\n  }\n\n  // 4. 连续重复行动态去重 (Consecutive Duplicate Line De-duplication)\n  // 消除轮播图、跑马灯、响应式重复渲染导致的同构行\n  const dedupedLines = [];\n  for (const line of cleanedLines) {\n    const trimmed = line.trim();\n    if (trimmed && dedupedLines.length > 0 && dedupedLines[dedupedLines.length - 1].trim() === trimmed) {\n      continue;\n    }\n    dedupedLines.push(line);\n  }\n\n  // 5. 空行动态规整 (最多保留两个换行)\n  return dedupedLines.join('\\n').replace(/\\n{3,}/g, '\\n\\n').trim();\n}\n\nconst config = $('⚙️ Workflow Config (修改网站入口)').first().json;\nconst siteName = config.siteName || 'custom_site';\nconst targetHostname = config.targetHostname;\n\n\nconst enrichedItems = [];\n\nfor (const item of $input.all()) {\n  const data = item.json;\n  const resultObj = (data.results && Array.isArray(data.results) && data.results[0]) ? data.results[0] : data;\n  const url = resultObj.url || data.url || item.json.url || '';\n  let lastmod = item.json.lastmod || null;\n\n  // 1. 拦截 HTTP 400+/500 异常页面，绝不把死链存入 Obsidian\n  if ((resultObj.status_code && resultObj.status_code >= 400) || resultObj.success === false) {\n    enrichedItems.push({ json: { failedCrawl: {\n      failedUrl: url,\n      errorMessage: resultObj.error_message || 'Crawl failed',\n      failedAt: new Date().toISOString()\n    } } });\n    continue;\n  }\n\n  // 2. 自动从响应头补全 Last-Modified\n  if (!lastmod) {\n    const respHeaders = resultObj.response_headers || {};\n    const srvMod = respHeaders['last-modified'] || respHeaders['Last-Modified'];\n    if (srvMod) {\n      try {\n        lastmod = new Date(srvMod).toISOString().split('T')[0];\n      } catch (e) {\n        lastmod = srvMod;\n      }\n    }\n  }\n\n  // 3. 正文 Markdown 提取与纯动态清洗去噪（优先采用未过滤图片与嵌入媒体的 raw_markdown）\n  let rawMarkdown = '';\n  if (resultObj.markdown) {\n    if (typeof resultObj.markdown === 'string') {\n      rawMarkdown = resultObj.markdown;\n    } else if (typeof resultObj.markdown === 'object') {\n      rawMarkdown = resultObj.markdown.raw_markdown || resultObj.markdown.fit_markdown || '';\n    }\n  }\n  if (!rawMarkdown) {\n    rawMarkdown = resultObj.cleaned_html || resultObj.content || '';\n  }\n\n  // 执行纯动态清洗（无任何硬编码字符串）\n  const cleanedMarkdown = cleanMarkdownDynamically(rawMarkdown);\n\n  // 4. 【Title is Metadata】真实标题保存在 Frontmatter 中\n  let title = (resultObj.metadata?.title || data.metadata?.title || resultObj.title || data.title || 'Untitled Page')\n    .replace(/[\\r\\n]/g, ' ')\n    .replace(/\"/g, '\\\\\"')\n    .trim();\n  if (title.length > 120) title = title.substring(0, 120);\n\n  // 提取 Crawl4AI 探测到的 YouTube 视频或媒体并保证其在正文中呈现\n  const mediaVideos = resultObj.media?.videos || [];\n  const youtubeUrls = [];\n  for (const v of mediaVideos) {\n    const vUrl = typeof v === 'string' ? v : (v?.src || v?.url || '');\n    if (vUrl && /youtube\\.com|youtu\\.be/i.test(vUrl)) {\n      if (!youtubeUrls.includes(vUrl)) youtubeUrls.push(vUrl);\n    }\n  }\n  if (Array.isArray(resultObj.links?.external)) {\n    for (const l of resultObj.links.external) {\n      const lHref = l?.href || l?.url || '';\n      if (lHref && /youtube\\.com|youtu\\.be/i.test(lHref)) {\n        if (!youtubeUrls.includes(lHref)) youtubeUrls.push(lHref);\n      }\n    }\n  }\n\n  let extraMediaSection = '';\n  if (youtubeUrls.length > 0) {\n    const missingVideos = youtubeUrls.filter(u => !cleanedMarkdown.includes(u));\n    if (missingVideos.length > 0) {\n      extraMediaSection = '\\n\\n### 关联视频资源 (Videos)\\n' + missingVideos.map(u => `- [YouTube 视频](${u})`).join('\\n');\n    }\n  }\n\n  const finalMarkdownContent = `${cleanedMarkdown}${extraMediaSection}`;\n  const hash = generateContentHash(finalMarkdownContent);\n  const crawlTime = new Date().toISOString();\n  const fileName = generateStableFileName(siteName, url);\n\n  const enrichedMarkdown = `---` + `\\n` +\n`title: \"${title}\"` + `\\n` +\n`url: \"${url}\"` + `\\n` +\n`crawl_time: \"${crawlTime}\"` + `\\n` +\n`hash: \"${hash}\"` + `\\n` +\n`---` + `\\n\\n` +\n`# ${title}` + `\\n\\n` +\n`${finalMarkdownContent}`;\n\n  enrichedItems.push({\n    json: {\n      url,\n      title,\n      siteName,\n      hash,\n      lastmod,\n      fileName,\n      content: enrichedMarkdown\n    }\n  });\n}\n\nreturn enrichedItems;\n"
+      },
+      "id": "metadata-enrichment-node",
+      "name": "Metadata & Taxonomy Enrichment",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3168,
+        208
+      ],
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "method": "PUT",
+        "url": "=http://web:8081/internal/crawl/{{ $json.fileName }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "text/markdown"
+            },
+            {
+              "name": "X-GraphRag-Crawl",
+              "value": "={{ $('Webhook (Crawl Trigger)').first().json.body.crawlToken }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "text/markdown",
+        "body": "={{ $json.content }}",
+        "options": {}
+      },
+      "id": "store-in-obsidian-node",
+      "name": "Store Crawled Markdown",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3376,
+        208
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const config = $('⚙️ Workflow Config (修改网站入口)').first().json;\nconst siteName = config.siteName || 'custom_site';\nconst autoDeleteStale = config.autoDeleteStale !== false;\n\nlet crawlIndex = {};\ntry {\n  const rawIndex = $('Fetch Crawl Index').first()?.json;\n  if (rawIndex && typeof rawIndex === 'object' && !rawIndex.error && !rawIndex.statusCode) {\n    for (const [k, v] of Object.entries(rawIndex)) {\n      crawlIndex[k.replace(/\\/+$/, '')] = v;\n    }\n  }\n} catch (e) {\n  crawlIndex = {};\n}\n\n// 仅获取【写入 Obsidian 成功】的条目实施事务提交 (Two-Phase Consistency)\nlet storedItems = [];\ntry {\n  storedItems = $('Store Crawled Markdown').all();\n} catch (e) {\n  storedItems = [];\n}\n\nfunction outputItems(name) {\n  const result = [];\n  for (let run = 0; ; run++) {\n    let items;\n    try { items = $(name).all(0, run); } catch { break; }\n    if (!items.length) break;\n    result.push(...items);\n  }\n  return result;\n}\nconst extracted = outputItems('Metadata & Taxonomy Enrichment');\nconst enrichedItems = extracted.filter(item => item.json.fileName);\n\nconst currentRun = $('Robots.txt & Gateway Filter').first().json.diagnostics || {};\nconst duplicateLinks = currentRun.duplicateLinks || [];\nconst redirectsFiltered = currentRun.redirectsFiltered || [];\nconst unchangedSkipped = currentRun.unchangedSkipped || [];\nconst failedCrawls = [...extracted, ...outputItems('Record Crawl Error')]\n  .map(item => item.json.failedCrawl).filter(Boolean);\nconst detectedStaleUrls = currentRun.staleUrls || [];\n\nlet crawledCount = enrichedItems.length;\nlet changedCount = 0;\nlet unchangedAfterCrawlCount = 0;\nconst crawledThisRun = [];\n\n// 建立 enriched map 供提取 metadata\nconst enrichedMap = new Map();\nfor (const item of enrichedItems) {\n  if (item.json.url) {\n    enrichedMap.set(item.json.url.replace(/\\/+$/, ''), item.json);\n  }\n}\n\n// 遍历真正成功持久化的条目更新 Index\nfor (const item of storedItems) {\n  const pairedIndex = item.pairedItem?.item;\n  let sourceItem = null;\n  if (typeof pairedIndex === 'number') {\n    try {\n      sourceItem = $('Metadata & Taxonomy Enrichment').item(pairedIndex)?.json;\n    } catch (e) {}\n  }\n  if (!sourceItem) {\n    sourceItem = Array.from(enrichedMap.values())[0];\n  }\n  if (!sourceItem || !sourceItem.url) continue;\n\n  const cleanUrl = sourceItem.url.replace(/\\/+$/, '');\n  const oldHash = crawlIndex[cleanUrl]?.hash;\n  const newHash = sourceItem.hash;\n\n  if (oldHash && oldHash === newHash) {\n    unchangedAfterCrawlCount++;\n  } else {\n    changedCount++;\n  }\n\n  crawlIndex[cleanUrl] = {\n    fileName: sourceItem.fileName,\n    hash: newHash,\n    lastmod: sourceItem.lastmod || (crawlIndex[cleanUrl]?.lastmod) || null,\n    lastCrawlTime: new Date().toISOString(),\n    status: 'success'\n  };\n\n  crawledThisRun.push({\n    url: cleanUrl,\n    fileName: sourceItem.fileName,\n    title: sourceItem.title,\n    hashChanged: oldHash !== newHash,\n    status: 'success'\n  });\n}\n\n// 处理线上已删除的孤儿页面 (Stale Cleanup)\nconst staleFilesToDelete = [];\nfor (const stale of detectedStaleUrls) {\n  const cleanUrl = stale.url.replace(/\\/+$/, '');\n  if (autoDeleteStale) {\n    if (stale.fileName) {\n      staleFilesToDelete.push({ fileName: stale.fileName, url: cleanUrl });\n    }\n    delete crawlIndex[cleanUrl]; // 从索引中注销\n  } else {\n    if (crawlIndex[cleanUrl]) {\n      crawlIndex[cleanUrl].status = 'stale_online';\n    }\n  }\n}\n\nconst failedReport = [];\nfor (const f of failedCrawls) {\n  const cleanUrl = f.failedUrl.replace(/\\/+$/, '');\n  failedReport.push({\n    url: cleanUrl,\n    error: f.errorMessage,\n    failedAt: f.failedAt\n  });\n  if (crawlIndex[cleanUrl]) {\n    crawlIndex[cleanUrl].status = 'failed';\n    crawlIndex[cleanUrl].lastError = f.errorMessage;\n  }\n}\n\n// 【工业级全景审计报告 (Production Audit Report)】\nconst report = {\n  crawlTime: new Date().toISOString(),\n  siteName: siteName,\n  targetUrl: config.targetUrl,\n  status: failedReport.length > 0 ? 'completed_with_errors' : ((changedCount > 0 || staleFilesToDelete.length > 0) ? 'updated_with_changes' : 'all_up_to_date'),\n  summary: {\n    totalRawDiscovered: currentRun.rawDiscoveredCount || 0,\n    sitemapDiscovered: currentRun.sitemapCount || 0,\n    homepageProbeDiscovered: currentRun.probeCount || 0,\n    uniquePagesDiscovered: currentRun.uniquePagesCount || 0,\n    blockedByRobotsCount: (currentRun.blockedByRobots || []).length,\n    blockedStaticCount: (currentRun.blockedStatic || []).length,\n    duplicateLinksMergedCount: duplicateLinks.length,\n    redirectsFilteredCount: redirectsFiltered.length,\n    unchangedSkippedCount: unchangedSkipped.length,\n    crawledThisRunCount: crawledCount,\n    changedCount: changedCount,\n    unchangedAfterCrawlCount: unchangedAfterCrawlCount,\n    staleDeletedCount: staleFilesToDelete.length,\n    failedCount: failedReport.length,\n    totalIndexedInVault: Object.keys(crawlIndex).length\n  },\n  crawledThisRun: crawledThisRun,\n  staleUrlsDeleted: staleFilesToDelete,\n  duplicateLinksMerged: duplicateLinks,\n  redirectsFiltered: redirectsFiltered,\n  unchangedSkipped: unchangedSkipped,\n  failedUrls: failedReport\n};\n\nreturn [{\n  json: {\n    siteName: siteName,\n    hasChanges: changedCount > 0 || staleFilesToDelete.length > 0 || failedReport.length > 0,\n    indexContent: JSON.stringify(crawlIndex, null, 2),\n    reportContent: JSON.stringify(report, null, 2),\n    staleCount: staleFilesToDelete.length,\n    staleFilesToDelete: staleFilesToDelete\n  }\n}];"
+      },
+      "id": "prepare-updated-index-node",
+      "name": "Prepare Updated Crawl Index",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2832,
+        592
+      ]
+    },
+    {
+      "parameters": {
+        "method": "PUT",
+        "url": "=http://web:8081/internal/crawl/raw/{{ $('Prepare Updated Crawl Index').first().json.siteName }}/_crawl_index.json",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "X-GraphRag-Crawl",
+              "value": "={{ $('Webhook (Crawl Trigger)').first().json.body.crawlToken }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ $('Prepare Updated Crawl Index').first().json.indexContent }}",
+        "options": {}
+      },
+      "id": "save-crawl-index-node",
+      "name": "Save Crawl Index",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3168,
+        448
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "\nconst errorItems = $input.all();\nfor (const item of errorItems) {\n  const errorData = item.json;\n  const pairedIndex = item.pairedItem?.item;\n  \n  let failedUrl = '';\n  try {\n    failedUrl = $('Unpack URLs').item(pairedIndex || 0)?.json?.url;\n  } catch (e) {\n    failedUrl = errorData?.url || errorData?.item?.url || 'unknown_url';\n  }\n\n  const errorMessage = errorData.error?.message || errorData.message || 'Crawl request failed';\n\n  item.json.failedCrawl = {\n    failedUrl: failedUrl,\n    errorMessage: errorMessage,\n    failedAt: new Date().toISOString()\n  };\n}\n\nreturn errorItems;"
+      },
+      "id": "record-crawl-error-node",
+      "name": "Record Crawl Error",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3632,
+        416
+      ]
+    },
+    {
+      "parameters": {
+        "method": "PUT",
+        "url": "=http://web:8081/internal/crawl/raw/{{ $('Prepare Updated Crawl Index').first().json.siteName }}/_crawl_report.json",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "X-GraphRag-Crawl",
+              "value": "={{ $('Webhook (Crawl Trigger)').first().json.body.crawlToken }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ $('Prepare Updated Crawl Index').first().json.reportContent }}",
+        "options": {}
+      },
+      "id": "save-crawl-report-node",
+      "name": "Save Crawl Report",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3168,
+        608
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $json.urlsToCrawlCount }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "check-urls-to-crawl-node",
+      "name": "If (Any URLs to Crawl?)",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        2128,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const validUrls = $input.first().json.validUrls || [];\nreturn validUrls.map(u => ({ json: u }));"
+      },
+      "id": "unpack-urls-node",
+      "name": "Unpack URLs",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2304,
+        208
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "c_stale_1",
+              "leftValue": "={{ $json.staleCount }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "check-stale-files-node",
+      "name": "If (Any Stale Files to Delete?)",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        3168,
+        768
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const files = $input.first().json.staleFilesToDelete || [];\nreturn files.map(f => ({ json: f }));\n"
+      },
+      "id": "unpack-stale-node",
+      "name": "Unpack Stale Files",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3376,
+        768
+      ]
+    },
+    {
+      "parameters": {
+        "method": "DELETE",
+        "url": "=http://web:8081/internal/crawl/{{ $json.fileName }}",
+        "options": {},
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-GraphRag-Crawl",
+              "value": "={{ $('Webhook (Crawl Trigger)').first().json.body.crawlToken }}"
+            }
+          ]
+        }
+      },
+      "id": "delete-stale-file-node",
+      "name": "Delete Stale Markdown",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3568,
+        768
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "graphrag-private-crawl",
+        "options": {}
+      },
+      "id": "webhook-trigger-node",
+      "name": "Webhook (Crawl Trigger)",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        160,
+        480
+      ],
+      "webhookId": "d2936f74-fba8-46ce-80da-34bb4949c411"
+    },
+    {
+      "id": "verify-portal-crawl",
+      "name": "Verify portal crawl",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -1616,
+        384
+      ],
+      "parameters": {
+        "url": "http://web:8081/internal/crawl/session",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-GraphRag-Crawl",
+              "value": "={{ $('Webhook (Crawl Trigger)').first().json.body.crawlToken }}"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "has-markdown-to-save",
+      "name": "Has Markdown to save?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1650,
+        470
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "has-crawl-markdown",
+              "leftValue": "={{ Boolean($json.fileName) }}",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    }
+  ],
+  "connections": {
+    "⚙️ Workflow Config (修改网站入口)": {
+      "main": [
+        [
+          {
+            "node": "Fetch robots.txt",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Fetch sitemap.xml",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Fetch Crawl Index",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Fetch Homepage (First-Level Discovery)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch robots.txt": {
+      "main": [
+        [
+          {
+            "node": "Parse robots.txt Rules",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch sitemap.xml": {
+      "main": [
+        [
+          {
+            "node": "XML to JSON (Index)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "XML to JSON (Index)": {
+      "main": [
+        [
+          {
+            "node": "Extract Sub-Sitemaps",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Sub-Sitemaps": {
+      "main": [
+        [
+          {
+            "node": "Fetch Child Sitemap",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Child Sitemap": {
+      "main": [
+        [
+          {
+            "node": "XML to JSON (Child)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "XML to JSON (Child)": {
+      "main": [
+        [
+          {
+            "node": "Extract All Sitemap URLs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract All Sitemap URLs": {
+      "main": [
+        [
+          {
+            "node": "Robots.txt & Gateway Filter",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Robots.txt & Gateway Filter": {
+      "main": [
+        [
+          {
+            "node": "If (Any URLs to Crawl?)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split In Batches (5 URLs)": {
+      "main": [
+        [
+          {
+            "node": "Prepare Updated Crawl Index",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Crawl4AI (/crawl)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Crawl4AI (/crawl)": {
+      "main": [
+        [
+          {
+            "node": "Metadata & Taxonomy Enrichment",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Record Crawl Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Metadata & Taxonomy Enrichment": {
+      "main": [
+        [
+          {
+            "node": "Has Markdown to save?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Store Crawled Markdown": {
+      "main": [
+        [
+          {
+            "node": "Split In Batches (5 URLs)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Record Crawl Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Updated Crawl Index": {
+      "main": [
+        [
+          {
+            "node": "Save Crawl Index",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Save Crawl Report",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "If (Any Stale Files to Delete?)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Record Crawl Error": {
+      "main": [
+        [
+          {
+            "node": "Split In Batches (5 URLs)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If (Any URLs to Crawl?)": {
+      "main": [
+        [
+          {
+            "node": "Unpack URLs",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Updated Crawl Index",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Unpack URLs": {
+      "main": [
+        [
+          {
+            "node": "Split In Batches (5 URLs)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If (Any Stale Files to Delete?)": {
+      "main": [
+        [
+          {
+            "node": "Unpack Stale Files",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Unpack Stale Files": {
+      "main": [
+        [
+          {
+            "node": "Delete Stale Markdown",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook (Crawl Trigger)": {
+      "main": [
+        [
+          {
+            "node": "Verify portal crawl",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verify portal crawl": {
+      "main": [
+        [
+          {
+            "node": "⚙️ Workflow Config (修改网站入口)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Markdown to save?": {
+      "main": [
+        [
+          {
+            "node": "Store Crawled Markdown",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Split In Batches (5 URLs)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "nodeGroups": [],
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "saveDataErrorExecution": "none",
+    "saveDataSuccessExecution": "none",
+    "saveManualExecutions": false
+  },
+  "tags": []
+}

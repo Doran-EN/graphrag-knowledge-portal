@@ -1,0 +1,154 @@
+@page "/chat"
+@namespace ObsidianGraphRag.Shared.Pages
+@using ObsidianGraphRag.Shared.Services.Retrieval
+
+<div class="chat-page-container">
+    <!-- Header -->
+    <div class="header-section chat-header-section">
+        <div>
+            <h1 class="page-title">💬 AI Knowledge Assistant</h1>
+            <p class="page-subtitle">GraphRAG retrieval grounded in your knowledge base</p>
+        </div>
+        <button class="btn-new-chat-top" @onclick="NewChat">
+            + New Chat
+        </button>
+    </div>
+
+    <div class="chat-search-scope">
+        <fieldset class="scope-type">
+            <legend>Search in</legend>
+            <div class="scope-options">
+                @foreach (var type in Enum.GetValues<ChatSourceType>())
+                {
+                    <label>
+                        <input type="radio" name="chat-source-type" value="@type" checked="@(sourceType == type)"
+                               @onchange="() => ChangeSourceType(type)" />
+                        <span>@type</span>
+                    </label>
+                }
+            </div>
+        </fieldset>
+
+        @if (sourceType == ChatSourceType.Both)
+        {
+            <p class="scope-summary">All websites and documents</p>
+        }
+        else
+        {
+            <div class="scope-source" @key="sourceType">
+                <label for="chat-source">@(sourceType == ChatSourceType.Websites ? "Website" : "Document")</label>
+                <select id="chat-source" class="site-dropdown-select" title="@CurrentContextLabel"
+                        value="@selectedSource" @onchange="OnSourceChanged" disabled="@(!HasSources)">
+                    <option value="">@(sourceType == ChatSourceType.Websites
+                        ? HasSources ? "All websites" : "No websites yet"
+                        : HasSources ? "All uploaded documents" : "No uploaded documents yet")</option>
+                    @if (sourceType == ChatSourceType.Websites)
+                    {
+                        @foreach (var site in detectedSites)
+                        {
+                            <option value="@site">@site</option>
+                        }
+                    }
+                    else
+                    {
+                        @foreach (var option in documentOptions)
+                        {
+                            <option value="@option.Key">@option.Value.Label</option>
+                        }
+                    }
+                </select>
+            </div>
+        }
+    </div>
+
+    <!-- Chat Card Shell -->
+    <div class="chat-card-layout">
+        <!-- Messages Flow -->
+        <div class="messages-area">
+            @foreach (var msg in messages)
+            {
+                <div class="message-row @(msg.IsUser ? "user-row" : "bot-row")">
+                    @if (!msg.IsUser)
+                    {
+                        <div class="bot-header">
+                            <span class="bot-icon">🤖</span>
+                            <span class="bot-title">AI Assistant</span>
+                            @if (!string.IsNullOrEmpty(msg.ContextLabel))
+                            {
+                                <span class="bot-site-badge">@msg.ContextLabel</span>
+                            }
+                        </div>
+                    }
+
+                    <div class="message-bubble @(msg.IsUser ? "user-bubble" : "bot-bubble")">
+                        @if (msg.FormattedAnswer is { } answer)
+                        {
+                            <div class="answer-markdown">@answer</div>
+                        }
+                        else
+                        {
+                            <div class="msg-text">@msg.Text</div>
+                        }
+
+                        @if (msg.Citations != null && msg.Citations.Count > 0)
+                        {
+                            <div class="citations-container">
+                                <span class="citation-tag-title">Sources cited</span>
+                                <div class="citation-badges">
+                                    @foreach (var citation in msg.Citations)
+                                    {
+                                        var c = citation.Source;
+                                        <details class="citation-details">
+                                            <summary class="cite-badge">[@citation.Number] @c.Title</summary>
+                                            <div class="citation-excerpt">@System.Net.WebUtility.HtmlDecode(c.Snippet)</div>
+                                        </details>
+                                        @if (c.MediaResources != null)
+                                        {
+                                            @foreach (var v in c.MediaResources.Where(m => m.Type == MediaResourceType.Video))
+                                            {
+                                                <a href="@v.Url" target="_blank" rel="noopener noreferrer" class="cite-badge video-cite-badge" style="background: rgba(239, 68, 68, 0.15); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.3); text-decoration: none; display: inline-flex; align-items: center; gap: 4px;">
+                                                    <span>▶️</span> @(string.IsNullOrWhiteSpace(v.Title) ? "Video Tutorial" : v.Title)
+                                                </a>
+                                            }
+                                        }
+                                    }
+                                </div>
+                            </div>
+                        }
+                    </div>
+                </div>
+            }
+
+            @if (queryStage is not null)
+            {
+                <div class="message-row bot-row">
+                    <div class="bot-header">
+                        <span class="bot-icon">🤖</span>
+                        <span class="bot-title">AI Assistant</span>
+                    </div>
+                    <div class="message-bubble bot-bubble thinking" aria-hidden="true">
+                        <span class="pulse-dot"></span>
+                        <span class="pulse-dot"></span>
+                        <span class="pulse-dot"></span>
+                    </div>
+                    <p class="thinking-status" role="status">@QueryStatus</p>
+                </div>
+            }
+        </div>
+
+        <!-- Clean Capsule Input Bar -->
+        <div class="input-container-wrapper">
+            <div class="capsule-input-box">
+                <span class="input-icon">📎</span>
+                <input type="text" class="chat-input" placeholder="Ask about your knowledge graph..."
+                       @bind="inputQuery" @bind:event="oninput" @onkeydown="HandleKeyDown" />
+                <button class="btn-send" @onclick="SendMessage" title="Send message" disabled="@(!HasSources || queryStage is not null)">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"/></svg>
+                </button>
+            </div>
+            <div class="disclaimer-text">
+                AI-GENERATED CONTENT CAN BE INACCURATE. CHECK IMPORTANT DETAILS AGAINST THE CITED SOURCES.
+            </div>
+        </div>
+    </div>
+</div>

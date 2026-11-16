@@ -1,0 +1,7 @@
+*
+!obsidian-graphrag-v2.Web/
+!obsidian-graphrag-v2.Web/**
+!obsidian-graphrag-v2.Shared/
+!obsidian-graphrag-v2.Shared/**
+**/bin/
+**/obj/
