@@ -60,7 +60,7 @@ docker compose up -d n8n crawl4ai
 
 1. Open [local n8n](http://localhost:15679) and create its owner account. Open a workflow, then use its **⋯** menu to import [the bundled workflow](n8n/Crawl4AI_Markdown_Obsidian_Universal_Ingest.json).
 2. Open **Crawl4AI (/crawl)** and create a **Header Auth** credential. Enter `Authorization` as the name and `Bearer <CRAWL4AI_API_TOKEN>` as the value, replacing the placeholder with the token from your local `.env`. Save the credential and publish the workflow.
-3. In the portal's **Knowledge Ingest** page, enter `https://example.com` and click **Start crawl**. Click **Refresh sources** after it finishes. Select **example**, run ingestion, and wait for **Completed**.
+3. In the portal's **Knowledge Ingest** page, enter `https://example.com` and click **Start crawl**. Wait for **Ready to ingest** and for the portal to select **example** automatically. Click **Run ingestion** and wait for **Completed**.
 4. In **AI Assistant Chat**, set **Search in → Websites → example**. Ask **“What is Example Domain intended to be used for?”** The expected answer is that it is intended for documentation examples, with a citation to the crawled content.
 
 ## Configuration and storage

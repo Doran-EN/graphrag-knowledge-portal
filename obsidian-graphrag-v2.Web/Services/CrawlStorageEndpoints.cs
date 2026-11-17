@@ -11,17 +11,17 @@ internal static class CrawlStorageEndpoints
                 ? Results.Json(new { site = grant.Site, url = grant.Url })
                 : Results.NotFound()).AllowAnonymous();
         app.MapMethods("/internal/crawl/raw/{site}/{fileName}", ["GET", "PUT", "DELETE"],
-            (HttpContext context, string site, string fileName, CrawlAccess access) =>
-                HandleAsync(context, site, fileName, Authorize(context, access, port))).AllowAnonymous();
+            (HttpContext context, string site, string fileName, CrawlAccess access, PortalWorkspaces workspaces) =>
+                HandleAsync(context, site, fileName, Authorize(context, access, port), workspaces)).AllowAnonymous();
     }
 
-    private static (string Path, string Site, string Url)? Authorize(HttpContext context, CrawlAccess access, int port) =>
+    private static CrawlAccess.CrawlGrant? Authorize(HttpContext context, CrawlAccess access, int port) =>
         context.Connection.LocalPort == port && context.Request.Headers.TryGetValue("X-GraphRag-Crawl", out var token)
             ? access.Read(token.ToString())
             : null;
 
     private static async Task<IResult> HandleAsync(
-        HttpContext context, string site, string fileName, (string Path, string Site, string Url)? grant)
+        HttpContext context, string site, string fileName, CrawlAccess.CrawlGrant? grant, PortalWorkspaces workspaces)
     {
         if (grant is not { } workspace || !string.Equals(workspace.Site, site, StringComparison.Ordinal))
             return Results.NotFound();
@@ -50,6 +50,7 @@ internal static class CrawlStorageEndpoints
         {
             if (Directory.Exists(sitePath))
                 File.Delete(filePath);
+            workspaces.For(workspace.WorkspaceId).Crawl.RecordPageDeleted(workspace.Token, fileName);
             return Results.Json(new { ok = true });
         }
 
@@ -65,6 +66,10 @@ internal static class CrawlStorageEndpoints
                 await context.Request.Body.CopyToAsync(temporaryFile, context.RequestAborted);
             }
             File.Move(temporaryPath, filePath, overwrite: true);
+            if (isReport)
+                workspaces.For(workspace.WorkspaceId).Crawl.RecordReport(workspace.Token, site, filePath);
+            else if (isMarkdown)
+                workspaces.For(workspace.WorkspaceId).Crawl.RecordPageSaved(workspace.Token, fileName);
         }
         finally
         {

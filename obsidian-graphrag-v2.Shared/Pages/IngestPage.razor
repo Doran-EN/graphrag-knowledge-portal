@@ -68,7 +68,7 @@
                 <div class="website-field">
                     <label for="ingest-website">Website URL</label>
                     <input id="ingest-website" type="url" class="source-control" @bind="targetWebsiteInput" @bind:event="oninput"
-                           placeholder="https://example.com" disabled="@IsBusy" aria-describedby="website-url-help"
+                           placeholder="https://example.com" disabled="@CrawlControlsBusy" aria-describedby="website-url-help"
                            aria-invalid="@(!string.IsNullOrWhiteSpace(targetWebsiteInput) && !HasValidUrl ? "true" : null)" />
                     <span id="website-url-help" class="field-help">
                         @if (!string.IsNullOrWhiteSpace(targetWebsiteInput) && !HasValidUrl)
@@ -78,14 +78,16 @@
                     </span>
                 </div>
                 <div class="source-footer">
-                    <button class="secondary-action" type="button" @onclick="TriggerN8nCrawl" disabled="@(IsBusy || !HasValidUrl)">
-                        @(N8nService.IsBusy ? "Starting…" : "Start crawl")
+                    <button class="secondary-action" type="button" @onclick="TriggerN8nCrawl" disabled="@(CrawlControlsBusy || !HasValidUrl)">
+                        @(N8nService.IsBusy ? "Crawling…" : crawlStatus is { NeedsAttention: true, IngestSite: null } ? "Retry crawl" : "Start crawl")
                     </button>
                 </div>
-                @if (crawlStatusMessage is not null)
-                {
-                    <div role="status" class="source-status @(crawlIsSuccess ? "success" : "warning")">@crawlStatusMessage</div>
-                }
+                <div role="status">
+                    @if (crawlStatus is { } status)
+                    {
+                        <div class="source-status @(status.IsRunning ? "running" : status.NeedsAttention ? "warning" : "success")">@status.Message</div>
+                    }
+                </div>
             </section>
         </div>
     </section>
@@ -99,7 +101,7 @@
             <div class="ingest-card settings-card">
                 <div class="target-heading">
                     <label for="ingest-source">Source to ingest</label>
-                    <button class="text-action" type="button" @onclick="RefreshSources" disabled="@IsBusy">
+                    <button class="text-action" type="button" @onclick="RefreshSources" disabled="@CrawlControlsBusy">
                         <span aria-hidden="true">↻</span> Refresh sources
                     </button>
                 </div>
@@ -148,7 +150,7 @@
 
                 <div class="ingest-action">
                     <span class="action-target">@(SelectedLabel ?? "Select a source to continue")</span>
-                    <button class="run-action" type="button" @onclick="RunIngestion" disabled="@(IsBusy || SelectedSite is null)">
+                    <button class="run-action" type="button" @onclick="RunIngestion" disabled="@(IngestBlocked || SelectedSite is null)">
                         @(IngestEngine.CurrentJob.IsRunning ? "Ingesting…" : "Run ingestion") <span aria-hidden="true">→</span>
                     </button>
                 </div>

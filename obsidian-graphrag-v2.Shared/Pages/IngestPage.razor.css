@@ -348,6 +348,7 @@
 .status-chip.attention, .source-status.warning { color: #8b451a; background: #fff3e4; }
 .status-chip.working { color: #19468a; background: var(--accent-light); }
 .source-status { padding: 9px 10px; border-radius: 8px; font-size: 13px; overflow-wrap: anywhere; }
+.source-status.running { color: #28476d; background: #edf3fc; }
 .activity-card .source-status { margin-top: 12px; line-height: 1.45; }
 .failed-section { display: block; margin: 2px 0 6px; }
 

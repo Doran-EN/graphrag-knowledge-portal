@@ -37,7 +37,9 @@ public partial class IngestPage : IDisposable
     private bool hasDocuments;
     private bool reprocess;
 
-    private bool IsBusy => IngestEngine.CurrentJob.IsRunning || isImportingDocument || N8nService.IsBusy;
+    private bool IsBusy => IngestEngine.CurrentJob.IsRunning || isImportingDocument;
+    private bool CrawlControlsBusy => IsBusy || N8nService.IsBusy;
+    private bool IngestBlocked => IsBusy || (N8nService.IsBusy && selectedTarget.StartsWith(WebsitePrefix, StringComparison.Ordinal));
     private bool HasValidUrl => Uri.TryCreate(targetWebsiteInput.Trim(), UriKind.Absolute, out var uri) &&
         uri.Scheme is "https" or "http" && !string.IsNullOrEmpty(uri.Host);
     private DocumentImportService.UploadedDocument? SelectedDocument =>
@@ -51,8 +53,7 @@ public partial class IngestPage : IDisposable
 
     private string targetWebsiteInput = string.Empty;
     private bool? isN8nOnline;
-    private string? crawlStatusMessage;
-    private bool crawlIsSuccess = true;
+    private N8nCrawlService.CrawlStatus? crawlStatus;
     private IBrowserFile? document;
     private bool isImportingDocument;
     private bool documentImportSucceeded;
@@ -62,9 +63,10 @@ public partial class IngestPage : IDisposable
     protected override async Task OnInitializedAsync()
     {
         IngestEngine.OnProgressChanged += RefreshProgress;
-        N8nService.OnStatusChanged += RefreshProgress;
+        N8nService.OnStatusChanged += RefreshCrawlStatus;
 
         await RefreshSources();
+        ApplyCrawlStatus();
     }
 
     protected override void OnParametersSet()
@@ -77,16 +79,30 @@ public partial class IngestPage : IDisposable
 
     private async Task TriggerN8nCrawl()
     {
-        if (IsBusy || !HasValidUrl)
+        if (CrawlControlsBusy || !HasValidUrl)
             return;
 
-        crawlStatusMessage = null;
-        var (success, msg) = await N8nService.TriggerCrawlAsync(targetWebsiteInput.Trim());
-        crawlIsSuccess = success;
-        crawlStatusMessage = success
-            ? "Crawl started. Refresh sources once it finishes, then choose the website to ingest."
-            : msg;
-        await RefreshSources();
+        await N8nService.TriggerCrawlAsync(targetWebsiteInput);
+    }
+
+    private void RefreshCrawlStatus() => _ = InvokeAsync(() =>
+    {
+        ApplyCrawlStatus();
+        StateHasChanged();
+    });
+
+    private void ApplyCrawlStatus()
+    {
+        crawlStatus = N8nService.Status;
+        if (crawlStatus is null || crawlStatus.IsRunning)
+            return;
+
+        ReadSources();
+        if (crawlStatus.IngestSite is { } site && availableSites.Contains(site))
+        {
+            selectedTarget = WebsitePrefix + site;
+            reprocess = false;
+        }
     }
 
     private async Task RefreshSources()
@@ -101,7 +117,8 @@ public partial class IngestPage : IDisposable
         var documentFolder = Path.Combine(GraphEngine.RootPath, "raw", DocumentImportService.Collection);
         hasDocuments = sites.Contains(DocumentImportService.Collection) &&
             Directory.EnumerateFiles(documentFolder, "*.md", SearchOption.AllDirectories).Any();
-        availableSites = sites.Where(site => site != DocumentImportService.Collection)
+        availableSites = sites.Where(site => site != DocumentImportService.Collection &&
+                Directory.EnumerateFiles(Path.Combine(GraphEngine.RootPath, "raw", site), "*.md", SearchOption.AllDirectories).Any())
             .OrderBy(site => site, StringComparer.OrdinalIgnoreCase).ToArray();
         uploadedDocuments = DocumentImport.GetUploadedDocuments();
         if (SelectedSite is null || (selectedTarget == AllDocuments && !hasDocuments))
@@ -164,7 +181,7 @@ public partial class IngestPage : IDisposable
 
     private async Task RunIngestion()
     {
-        if (IsBusy || SelectedSite is not { } site || SelectedLabel is not { } label)
+        if (IngestBlocked || SelectedSite is not { } site || SelectedLabel is not { } label)
             return;
         await IngestEngine.RunIngestAsync(site, label, SelectedDocument?.Id, reprocess);
     }
@@ -174,6 +191,6 @@ public partial class IngestPage : IDisposable
     public void Dispose()
     {
         IngestEngine.OnProgressChanged -= RefreshProgress;
-        N8nService.OnStatusChanged -= RefreshProgress;
+        N8nService.OnStatusChanged -= RefreshCrawlStatus;
     }
 }

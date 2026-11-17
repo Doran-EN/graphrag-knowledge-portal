@@ -62,10 +62,10 @@ internal sealed class CrawlAccess(IDataProtectionProvider protection, PortalAcco
         site = site.Split('.')[0].ToLowerInvariant();
         if (site == "documents" || !System.Text.RegularExpressions.Regex.IsMatch(site, @"\A[A-Za-z0-9_-]{1,63}\z"))
             throw new ArgumentException("This website cannot be used as a crawl source.");
-        return _protector.Protect($"{id}\n{site}\n{url}", TimeSpan.FromHours(2));
+        return _protector.Protect($"{id}\n{site}\n{url}", N8nCrawlService.GrantLifetime);
     }
 
-    public (string Path, string Site, string Url)? Read(string token)
+    public CrawlGrant? Read(string token)
     {
         if (string.IsNullOrEmpty(token) || token.Length > 4096)
             return null;
@@ -73,11 +73,13 @@ internal sealed class CrawlAccess(IDataProtectionProvider protection, PortalAcco
         try
         {
             var fields = _protector.Unprotect(token).Split('\n', 3);
-            return (accounts.WorkspacePath(fields[0]), fields[1], fields[2]);
+            return new CrawlGrant(fields[0], accounts.WorkspacePath(fields[0]), fields[1], fields[2], token);
         }
         catch (System.Security.Cryptography.CryptographicException)
         {
             return null;
         }
     }
+
+    public sealed record CrawlGrant(string WorkspaceId, string Path, string Site, string Url, string Token);
 }
