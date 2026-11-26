@@ -46,6 +46,7 @@ namespace ObsidianGraphRag.Shared.Models
 
     public class SiteKnowledgeSummary
     {
+        public bool IsArchived { get; set; }
         public string SiteName { get; set; } = string.Empty;
         public string BaseUrl { get; set; } = string.Empty;
         public int RawDocCount { get; set; }

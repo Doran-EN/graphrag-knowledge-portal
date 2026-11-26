@@ -33,4 +33,3 @@
 .account-card button { background: #164ca6; color: #fff; font-weight: 600; cursor: pointer; }
 .account-card button.secondary { background: #edf4ff; color: #19468a; }
 .account-card .account-error { color: #9b3326; }
-.invite-code { overflow-wrap: anywhere; padding: 12px; background: #edf4ff; border-radius: 8px; }

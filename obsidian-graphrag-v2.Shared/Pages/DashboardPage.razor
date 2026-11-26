@@ -7,7 +7,7 @@
     <div class="header-section">
         <div>
             <h1 class="page-title">Knowledge Bases Overview</h1>
-            <p class="page-subtitle">Multi-site GraphRAG knowledge base</p>
+            <p class="page-subtitle">@(Workspace?.Name ?? "Multi-site GraphRAG knowledge base")</p>
         </div>
         <div class="header-metrics">
             <div class="metric-badge">
@@ -48,58 +48,127 @@
         <div class="site-grid">
             @foreach (var site in sites)
             {
-                <div class="site-card">
+                var isDocuments = site.SiteName == DocumentImportService.Collection;
+                var websiteTarget = new ArchiveTarget(site.SiteName, null, site.SiteName);
+                <div class="site-card" @key="site.SiteName">
                     <div class="card-header">
-                        <div>
-                            <h3 class="site-name">@(site.SiteName == DocumentImportService.Collection ? "Uploaded documents" : site.SiteName)</h3>
+                        <div class="card-title">
+                            <h3 class="site-name">@(isDocuments ? "Uploaded documents" : site.SiteName)</h3>
                             @if (!string.IsNullOrEmpty(site.BaseUrl))
                             {
-                                <a href="@site.BaseUrl" target="_blank" class="site-url">@site.BaseUrl ↗</a>
+                                <a href="@site.BaseUrl" target="_blank" rel="noopener noreferrer" class="site-url" title="@site.BaseUrl">
+                                    <span class="site-url-label">@site.BaseUrl</span>
+                                    <span aria-hidden="true">↗</span>
+                                </a>
                             }
                         </div>
-                        <span class="status-tag @(site.SyncStatus == "Synced" ? "tag-synced" : "tag-pending")">
+                        <span class="status-tag @(site.IsArchived ? "tag-archived" : site.SyncStatus == "Synced" ? "tag-synced" : "tag-pending")">
                             @site.SyncStatus
                         </span>
                     </div>
 
-                    <!-- Mini Glowing Graph Thumbnail -->
-                    <div class="mini-graph-preview" @onclick="() => NavigateToSite(site.SiteName)">
-                        <div class="preview-node node-1"></div>
-                        <div class="preview-node node-2"></div>
-                        <div class="preview-node node-3"></div>
-                        <div class="preview-node node-4"></div>
-                        <div class="preview-edge edge-1"></div>
-                        <div class="preview-edge edge-2"></div>
-                        <div class="preview-edge edge-3"></div>
-                        <div class="graph-center-label">
-                            <span>@site.EntityCount Entities</span> • <span>@site.ConceptCount Concepts</span>
+                    @if (site.IsArchived)
+                    {
+                        <p class="archive-help">Hidden from chat and Graph Explorer.</p>
+                        <div class="card-actions">
+                            <button type="button" class="btn-secondary btn-card-icon" disabled="@isChangingArchive"
+                                    aria-label="@($"Restore {site.SiteName}")"
+                                    @onclick="() => ChangeArchive(websiteTarget, false)">Restore</button>
                         </div>
-                    </div>
+                    }
+                    else
+                    {
+                        <!-- Mini Glowing Graph Thumbnail -->
+                        <div class="mini-graph-preview" @onclick="() => NavigateToSite(site.SiteName)">
+                            <div class="preview-node node-1"></div>
+                            <div class="preview-node node-2"></div>
+                            <div class="preview-node node-3"></div>
+                            <div class="preview-node node-4"></div>
+                            <div class="preview-edge edge-1"></div>
+                            <div class="preview-edge edge-2"></div>
+                            <div class="preview-edge edge-3"></div>
+                            <div class="graph-center-label">
+                                <span>@site.EntityCount Entities</span> • <span>@site.ConceptCount Concepts</span>
+                            </div>
+                        </div>
 
-                    <div class="card-stats">
-                        <div class="stat-item">
-                            <span class="stat-num">@site.RawDocCount</span>
-                            <span class="stat-label">Raw Docs</span>
+                        <div class="card-stats">
+                            <div class="stat-item">
+                                <span class="stat-num">@site.RawDocCount</span>
+                                <span class="stat-label">Raw Docs</span>
+                            </div>
+                            <div class="stat-item">
+                                <span class="stat-num">@site.WikiSourceCount</span>
+                                <span class="stat-label">Wiki Sources</span>
+                            </div>
+                            <div class="stat-item">
+                                <span class="stat-num">@site.HealthScore%</span>
+                                <span class="stat-label">Health</span>
+                            </div>
                         </div>
-                        <div class="stat-item">
-                            <span class="stat-num">@site.WikiSourceCount</span>
-                            <span class="stat-label">Wiki Sources</span>
-                        </div>
-                        <div class="stat-item">
-                            <span class="stat-num">@site.HealthScore%</span>
-                            <span class="stat-label">Health</span>
-                        </div>
-                    </div>
 
-                    <div class="card-actions">
-                        <button class="btn-primary btn-card-main" @onclick="() => NavigateToSite(site.SiteName)">
-                            <span>Knowledge Graph</span>
-                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
-                        </button>
-                        <button class="btn-secondary btn-card-icon" title="Sync / Compile Knowledge Base" @onclick="() => NavigateToIngest(site.SiteName)">
-                            📥 Ingest
-                        </button>
-                    </div>
+                        <div class="card-actions">
+                            <button class="btn-primary btn-card-main" @onclick="() => NavigateToSite(site.SiteName)">
+                                <span>Knowledge Graph</span>
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+                            </button>
+                            <button class="btn-secondary btn-card-icon" title="Sync / Compile Knowledge Base" @onclick="() => NavigateToIngest(site.SiteName)">
+                                📥 Ingest
+                            </button>
+                            @if (canManageArchive && !isDocuments)
+                            {
+                                <button type="button" class="btn-secondary btn-card-icon" disabled="@isChangingArchive"
+                                        aria-label="@($"Archive {site.SiteName}")"
+                                        @onclick="() => ConfirmArchive(websiteTarget)">Archive</button>
+                            }
+                        </div>
+                        @if (PublishWebsite is not null && !isDocuments && site.RawDocCount > 0)
+                        {
+                            @PublishWebsite(site.SiteName)
+                        }
+                    }
+                    @if (canManageArchive && isDocuments && managedDocuments.Count > 0)
+                    {
+                        <details class="document-archive">
+                            <summary>Manage documents</summary>
+                            <ul>
+                                @foreach (var file in managedDocuments)
+                                {
+                                    var documentTarget = new ArchiveTarget(site.SiteName, file.Id, DocumentLabel(file));
+                                    <li @key="file.Id">
+                                        <span>@documentTarget.Label@(file.IsArchived ? " · Archived" : "")</span>
+                                        @if (file.IsArchived)
+                                        {
+                                            <button type="button" class="btn-secondary btn-card-icon" disabled="@isChangingArchive"
+                                                    aria-label="@($"Restore {documentTarget.Label}")"
+                                                    @onclick="() => ChangeArchive(documentTarget, false)">Restore</button>
+                                        }
+                                        else
+                                        {
+                                            <button type="button" class="btn-secondary btn-card-icon" disabled="@isChangingArchive"
+                                                    aria-label="@($"Archive {documentTarget.Label}")"
+                                                    @onclick="() => ConfirmArchive(documentTarget)">Archive</button>
+                                        }
+                                    </li>
+                                }
+                            </ul>
+                        </details>
+                    }
+                    @if (pendingArchive is { } pending && pending.Site == site.SiteName)
+                    {
+                        <div class="archive-confirm">
+                            <p>Hide <strong>@pending.Label</strong> from chat and Graph Explorer?</p>
+                            <div class="card-actions">
+                                <button type="button" class="btn-secondary btn-card-icon" @onclick="() => pendingArchive = null">Cancel</button>
+                                <button type="button" class="btn-secondary btn-card-icon" disabled="@isChangingArchive"
+                                        @onclick="() => ChangeArchive(pending, true)">Archive @(isDocuments ? "document" : "website")</button>
+                            </div>
+                        </div>
+                    }
+                    @if (archiveMessageSite == site.SiteName)
+                    {
+                        <div role="status" class="archive-status @(archiveFailed ? "archive-error" : "")">@archiveMessage</div>
+                    }
                 </div>
             }
         </div>

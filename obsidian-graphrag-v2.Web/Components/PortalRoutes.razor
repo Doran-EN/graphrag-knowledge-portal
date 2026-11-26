@@ -1,13 +1,100 @@
 @using Microsoft.AspNetCore.Components.Authorization
+@using System.Security.Claims
 @using ObsidianGraphRag.Shared
+@using ObsidianGraphRag.Shared.Models
+@using obsidian_graphrag_v2.Web.Services
+@inject PortalAccounts Accounts
+@inject PortalWorkspaceSelection Selection
+@inject NavigationManager Navigation
 
-<AuthorizeView>
+<AuthorizeView Context="auth">
     <Authorized>
-        <CascadingValue Name="ShowPortalAccount" Value="true" IsFixed="true">
-            <Routes />
-        </CascadingValue>
+        @if (Accounts.GetWorkspaceId(auth.User, Selection.DepartmentId) is not null)
+        {
+            var departments = Accounts.GetWorkspaceDepartments(auth.User);
+            var name = departments.FirstOrDefault(department => department.Id == Selection.DepartmentId)?.Name;
+            var scope = new WorkspaceScope(name is null ? "My workspace" : $"{name} workspace", Selection.DepartmentId,
+                () => Accounts.GetWorkspaceId(auth.User, Selection.DepartmentId) is not null);
+            <CascadingValue Value="scope">
+                <CascadingValue Name="WorkspaceSelector" Value="@WorkspaceSelector(auth.User, scope.Name)">
+                    <CascadingValue Name="PublishWebsite" Value="@WebsitePublisher(auth.User)">
+                        <CascadingValue Name="PortalAccountName" Value="@PortalAccounts.DisplayNameFor(auth.User)">
+                            <CascadingValue Name="ShowUserControl" Value='@(auth.User.IsInRole("Owner"))'>
+                                <Router AppAssembly="typeof(PortalRoutes).Assembly"
+                                        AdditionalAssemblies="new[] { typeof(MainLayout).Assembly }"
+                                        NotFoundPage="typeof(ObsidianGraphRag.Shared.Pages.NotFound)"
+                                        OnNavigateAsync="CheckWorkspaceNavigation">
+                                    <Found Context="routeData">
+                                        <AuthorizeRouteView RouteData="routeData" DefaultLayout="typeof(MainLayout)">
+                                            <NotAuthorized>
+                                                <p>You do not have access to this page.</p>
+                                                <a href="/">Back to dashboard</a>
+                                            </NotAuthorized>
+                                        </AuthorizeRouteView>
+                                        <FocusOnNavigate RouteData="routeData" Selector="h1" />
+                                    </Found>
+                                </Router>
+                            </CascadingValue>
+                        </CascadingValue>
+                    </CascadingValue>
+                </CascadingValue>
+            </CascadingValue>
+        }
+        else
+        {
+            <p>You do not have access to this workspace.</p>
+            <a href="/" data-enhance-nav="false">Open My workspace</a>
+        }
     </Authorized>
     <NotAuthorized>
         <a href="/account/sign-in" data-enhance-nav="false">Sign in to your workspace</a>
     </NotAuthorized>
 </AuthorizeView>
+
+@code {
+    private RenderFragment WorkspaceSelector(ClaimsPrincipal user, string name) =>
+        @<div class="workspace-selector">
+            @{ var departments = Accounts.GetWorkspaceDepartments(user); }
+            @if (departments.Count > 0)
+            {
+                <label for="portal-workspace">Workspace</label>
+                <select id="portal-workspace" @bind:get="Selection.DepartmentId ?? string.Empty" @bind:set="SwitchWorkspace">
+                    <option value="">My workspace</option>
+                    @foreach (var department in departments)
+                    {
+                        <option value="@department.Id">@department.Name workspace</option>
+                    }
+                </select>
+            }
+            else
+            {
+                <span>@name</span>
+            }
+        </div>;
+
+    private RenderFragment<string>? WebsitePublisher(ClaimsPrincipal user) =>
+        user.IsInRole("Owner") && Selection.DepartmentId is null
+            ? site => @<PublishWebsite Site="@site" />
+            : null;
+
+    private void SwitchWorkspace(string? departmentId)
+    {
+        var route = new Uri(Navigation.Uri).AbsolutePath;
+        var destination = route switch
+        {
+            "/ingest" => "/ingest",
+            "/chat" => "/chat",
+            "/lint" => "/lint",
+            _ when route.StartsWith("/explorer", StringComparison.Ordinal) => "/explorer",
+            _ => "/dashboard"
+        };
+        Navigation.NavigateTo(WorkspaceScope.Link(destination, departmentId), forceLoad: true);
+    }
+
+    private Task CheckWorkspaceNavigation(NavigationContext context)
+    {
+        if (PortalWorkspaceSelection.FromUri(Navigation.Uri) != Selection.DepartmentId)
+            Navigation.NavigateTo(Navigation.Uri, forceLoad: true);
+        return Task.CompletedTask;
+    }
+}

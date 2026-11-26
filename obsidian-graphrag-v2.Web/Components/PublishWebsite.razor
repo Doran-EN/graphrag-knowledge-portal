@@ -1,0 +1,80 @@
+@using Microsoft.AspNetCore.Components.Authorization
+@using ObsidianGraphRag.Shared.Models
+@using obsidian_graphrag_v2.Web.Services
+@inject PortalWebsitePublisher Publisher
+@inject PortalAccounts Accounts
+@inject AuthenticationStateProvider Authentication
+
+@if (departments.Count > 0)
+{
+    <details class="publish-website">
+        <summary>Publish to department</summary>
+        <label>
+            <span>Department workspace</span>
+            <select @bind="departmentId" disabled="@publishing">
+                <option value="">Select department</option>
+                @foreach (var department in departments)
+                {
+                    <option value="@department.Id">@department.Name</option>
+                }
+            </select>
+        </label>
+        <button type="button" class="btn-secondary" disabled="@(publishing || departmentId.Length == 0)"
+                @onclick="PublishAsync">@(publishing ? "Publishing and ingesting…" : "Publish website")</button>
+        @if (message is not null)
+        {
+            <p role="status">@message</p>
+        }
+        @if (publishedDepartmentId is not null)
+        {
+            <a href="@WorkspaceScope.Link($"/ingest?site={Uri.EscapeDataString(Site)}", publishedDepartmentId)"
+               data-enhance-nav="false">Open department ingestion</a>
+        }
+    </details>
+}
+
+@code {
+    [Parameter, EditorRequired]
+    public string Site { get; set; } = "";
+
+    private IReadOnlyList<PortalAccounts.Department> departments = [];
+    private string departmentId = "";
+    private string? publishedDepartmentId;
+    private bool publishing;
+    private string? message;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var state = await Authentication.GetAuthenticationStateAsync();
+        departments = Accounts.GetWorkspaceDepartments(state.User);
+    }
+
+    private async Task PublishAsync()
+    {
+        if (publishing || departmentId.Length == 0)
+            return;
+
+        publishing = true;
+        publishedDepartmentId = null;
+        message = null;
+        try
+        {
+            var state = await Authentication.GetAuthenticationStateAsync();
+            await Publisher.PublishAsync(state.User, Site, departmentId);
+            publishedDepartmentId = departmentId;
+            message = "Website pages copied. Check the department's ingestion status.";
+        }
+        catch (InvalidOperationException error)
+        {
+            message = error.Message;
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
+            message = "The website could not be published. Check the target workspace before retrying.";
+        }
+        finally
+        {
+            publishing = false;
+        }
+    }
+}

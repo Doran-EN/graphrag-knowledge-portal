@@ -8,8 +8,11 @@ using ObsidianGraphRag.Shared.Services.SiteManager;
 
 namespace ObsidianGraphRag.Shared.Pages;
 
-public partial class ChatPage
+public partial class ChatPage : IDisposable
 {
+    [CascadingParameter]
+    public WorkspaceScope? Workspace { get; set; }
+
     [Inject]
     private GraphRagOrchestrator Orchestrator { get; set; } = default!;
 
@@ -18,6 +21,9 @@ public partial class ChatPage
 
     [Inject]
     private DocumentImportService DocumentImport { get; set; } = default!;
+
+    [Inject]
+    private ObsidianIngestEngine IngestEngine { get; set; } = default!;
 
     [Inject]
     private ILogger<ChatPage> Logger { get; set; } = default!;
@@ -73,9 +79,17 @@ public partial class ChatPage
 
     protected override void OnInitialized()
     {
+        RefreshSourceOptions();
+        IngestEngine.OnSourceArchiveChanged += OnSourceArchiveChanged;
+    }
+
+    private void RefreshSourceOptions()
+    {
         var sites = SiteManager.GetSiteNames();
+        detectedSites.Clear();
         detectedSites.AddRange(sites.Where(site => !site.Equals(DocumentImportService.Collection, StringComparison.OrdinalIgnoreCase))
             .OrderBy(site => site, StringComparer.OrdinalIgnoreCase));
+        documentOptions.Clear();
         foreach (var group in DocumentImport.GetUploadedDocuments().GroupBy(document => document.FileName, StringComparer.OrdinalIgnoreCase))
         {
             var uploads = group.ToArray();
@@ -88,8 +102,22 @@ public partial class ChatPage
         }
     }
 
+    private void OnSourceArchiveChanged() => _ = InvokeAsync(() =>
+    {
+        if (Workspace?.CanAccess() == false)
+            return;
+        RefreshSourceOptions();
+        if ((sourceType == ChatSourceType.Documents && !documentOptions.ContainsKey(selectedSource)) ||
+            (sourceType == ChatSourceType.Websites && !detectedSites.Contains(selectedSource)))
+            selectedSource = "";
+        StateHasChanged();
+    });
+
+    public void Dispose() => IngestEngine.OnSourceArchiveChanged -= OnSourceArchiveChanged;
+
     private void ChangeSourceType(ChatSourceType type)
     {
+        RefreshSourceOptions();
         sourceType = type;
         selectedSource = "";
     }
@@ -128,6 +156,8 @@ public partial class ChatPage
         try
         {
             var result = await Orchestrator.QueryAsync(q, sourceType, site, document, ShowQueryStageAsync);
+            if (Workspace?.CanAccess() == false)
+                return;
             messages.Add(new ChatDisplayMessage
             {
                 Text = result.Answer,
@@ -153,6 +183,8 @@ public partial class ChatPage
 
     private Task ShowQueryStageAsync(ChatQueryStage stage) => InvokeAsync(() =>
     {
+        if (Workspace?.CanAccess() == false)
+            return;
         queryStage = stage;
         StateHasChanged();
     });

@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Components;
+using ObsidianGraphRag.Shared.Models;
 using Microsoft.AspNetCore.Components.Forms;
 using System.Text.Json;
 using ObsidianGraphRag.Shared.Services.Ingestion;
@@ -10,6 +11,9 @@ namespace ObsidianGraphRag.Shared.Pages;
 
 public partial class IngestPage : IDisposable
 {
+    [CascadingParameter]
+    public WorkspaceScope? Workspace { get; set; }
+
     [Inject]
     private ObsidianIngestEngine IngestEngine { get; set; } = default!;
 
@@ -54,6 +58,7 @@ public partial class IngestPage : IDisposable
     private string targetWebsiteInput = string.Empty;
     private bool? isN8nOnline;
     private N8nCrawlService.CrawlStatus? crawlStatus;
+    private PeriodicTimer? crawlClock;
     private IBrowserFile? document;
     private bool isImportingDocument;
     private bool documentImportSucceeded;
@@ -63,6 +68,7 @@ public partial class IngestPage : IDisposable
     protected override async Task OnInitializedAsync()
     {
         IngestEngine.OnProgressChanged += RefreshProgress;
+        IngestEngine.OnSourceArchiveChanged += RefreshSourceArchive;
         N8nService.OnStatusChanged += RefreshCrawlStatus;
 
         await RefreshSources();
@@ -82,11 +88,19 @@ public partial class IngestPage : IDisposable
         if (CrawlControlsBusy || !HasValidUrl)
             return;
 
-        await N8nService.TriggerCrawlAsync(targetWebsiteInput);
+        await N8nService.TriggerCrawlAsync(targetWebsiteInput, N8nCrawlService.CrawlScope.Section);
+    }
+
+    private void CancelCrawl(DateTimeOffset startedAt)
+    {
+        if (Workspace?.CanAccess() != false)
+            N8nService.CancelCrawl(startedAt);
     }
 
     private void RefreshCrawlStatus() => _ = InvokeAsync(() =>
     {
+        if (Workspace?.CanAccess() == false)
+            return;
         ApplyCrawlStatus();
         StateHasChanged();
     });
@@ -105,6 +119,54 @@ public partial class IngestPage : IDisposable
         }
     }
 
+    protected override void OnAfterRender(bool firstRender)
+    {
+        if (crawlStatus?.Progress is null)
+        {
+            StopCrawlClock();
+        }
+        else if (crawlClock is null)
+        {
+            crawlClock = new PeriodicTimer(TimeSpan.FromSeconds(1));
+            _ = RefreshCrawlClockAsync(crawlClock);
+        }
+    }
+
+    private async Task RefreshCrawlClockAsync(PeriodicTimer timer)
+    {
+        while (await timer.WaitForNextTickAsync())
+            await InvokeAsync(() =>
+            {
+                if (ReferenceEquals(crawlClock, timer))
+                    StateHasChanged();
+            });
+    }
+
+    private void StopCrawlClock()
+    {
+        crawlClock?.Dispose();
+        crawlClock = null;
+    }
+
+    private static string CrawlStageDetail(N8nCrawlService.CrawlProgress progress) => progress.Stage switch
+    {
+        N8nCrawlService.CrawlStage.Starting => "Waiting for the crawler to accept the website.",
+        N8nCrawlService.CrawlStage.WaitingForWorkflow => "n8n accepted the request. Waiting for the workflow to connect to this workspace.",
+        N8nCrawlService.CrawlStage.CollectingPages => "Checking crawl rules and discovering pages in the selected scope.",
+        N8nCrawlService.CrawlStage.FetchingPages => "Fetching the selected pages.",
+        N8nCrawlService.CrawlStage.SavingPages => "Saving pages as they arrive from the crawler.",
+        _ when progress.StalePagesTotal is > 0 => $"Removing stale pages. {progress.StalePagesRemoved} of {progress.StalePagesTotal} removed.",
+        _ => "Waiting for the final report and any cleanup."
+    };
+
+    private static string FormatCrawlTime(TimeSpan duration)
+    {
+        var elapsed = duration < TimeSpan.Zero ? TimeSpan.Zero : duration;
+        return elapsed.TotalHours >= 1
+            ? $"{(int)elapsed.TotalHours}:{elapsed.Minutes:00}:{elapsed.Seconds:00}"
+            : $"{elapsed.Minutes}:{elapsed.Seconds:00}";
+    }
+
     private async Task RefreshSources()
     {
         ReadSources();
@@ -114,9 +176,11 @@ public partial class IngestPage : IDisposable
     private void ReadSources()
     {
         var sites = SiteManager.GetSiteNames();
+        var archive = SourceArchive.Read(GraphEngine.RootPath);
         var documentFolder = Path.Combine(GraphEngine.RootPath, "raw", DocumentImportService.Collection);
-        hasDocuments = sites.Contains(DocumentImportService.Collection) &&
-            Directory.EnumerateFiles(documentFolder, "*.md", SearchOption.AllDirectories).Any();
+        hasDocuments = Directory.Exists(documentFolder) &&
+            Directory.EnumerateFiles(documentFolder, "*.md", SearchOption.AllDirectories)
+                .Any(file => !archive.ContainsPath(Path.GetRelativePath(GraphEngine.RootPath, file)));
         availableSites = sites.Where(site => site != DocumentImportService.Collection &&
                 Directory.EnumerateFiles(Path.Combine(GraphEngine.RootPath, "raw", site), "*.md", SearchOption.AllDirectories).Any())
             .OrderBy(site => site, StringComparer.OrdinalIgnoreCase).ToArray();
@@ -124,6 +188,14 @@ public partial class IngestPage : IDisposable
         if (SelectedSite is null || (selectedTarget == AllDocuments && !hasDocuments))
             selectedTarget = string.Empty;
     }
+
+    private void RefreshSourceArchive() => _ = InvokeAsync(() =>
+    {
+        if (Workspace?.CanAccess() == false)
+            return;
+        ReadSources();
+        StateHasChanged();
+    });
 
     private string DocumentLabel(DocumentImportService.UploadedDocument file) =>
         uploadedDocuments.Count(other => string.Equals(other.FileName, file.FileName, StringComparison.OrdinalIgnoreCase)) > 1
@@ -151,6 +223,8 @@ public partial class IngestPage : IDisposable
 
             await using var input = document.OpenReadStream(DocumentImportService.MaxFileBytes);
             var result = await DocumentImport.ImportAsync(document.Name, input);
+            if (Workspace?.CanAccess() == false)
+                return;
             ReadSources();
             selectedTarget = DocumentPrefix + result.Id;
             reprocess = false;
@@ -186,11 +260,17 @@ public partial class IngestPage : IDisposable
         await IngestEngine.RunIngestAsync(site, label, SelectedDocument?.Id, reprocess);
     }
 
-    private void RefreshProgress() => _ = InvokeAsync(StateHasChanged);
+    private void RefreshProgress() => _ = InvokeAsync(() =>
+    {
+        if (Workspace?.CanAccess() != false)
+            StateHasChanged();
+    });
 
     public void Dispose()
     {
+        StopCrawlClock();
         IngestEngine.OnProgressChanged -= RefreshProgress;
+        IngestEngine.OnSourceArchiveChanged -= RefreshSourceArchive;
         N8nService.OnStatusChanged -= RefreshCrawlStatus;
     }
 }

@@ -1,24 +1,41 @@
 @using Microsoft.AspNetCore.Components.Routing
 
 <div class="nav-menu">
-    <NavLink class="nav-link-custom" href="dashboard" Match="NavLinkMatch.All">
+    <NavLink class="nav-link-custom" href="@Link("dashboard")" Match="NavLinkMatch.All">
         <span>🌐</span>
         <span>Managed Websites</span>
     </NavLink>
-    <NavLink class="nav-link-custom" href="ingest">
+    <NavLink class="nav-link-custom" href="@Link("ingest")">
         <span>📥</span>
         <span>Knowledge Ingest</span>
     </NavLink>
-    <NavLink class="nav-link-custom" href="lint">
+    <NavLink class="nav-link-custom" href="@Link("lint")">
         <span>🩺</span>
         <span>Wiki Lint & Health</span>
     </NavLink>
-    <NavLink class="nav-link-custom" href="explorer">
+    <NavLink class="nav-link-custom" href="@Link("explorer")">
         <span>🕸️</span>
         <span>Graph Explorer</span>
     </NavLink>
-    <NavLink class="nav-link-custom" href="chat">
+    <NavLink class="nav-link-custom" href="@Link("chat")">
         <span>💬</span>
         <span>AI Assistant Chat</span>
     </NavLink>
+    @if (ShowUserControl)
+    {
+        <NavLink class="nav-link-custom" href="@Link("user-control")">
+            <span aria-hidden="true">&#128101;</span>
+            <span>User Control</span>
+        </NavLink>
+    }
 </div>
+
+@code {
+    [CascadingParameter(Name = "ShowUserControl")]
+    public bool ShowUserControl { get; set; }
+
+    [CascadingParameter]
+    public WorkspaceScope? Workspace { get; set; }
+
+    private string Link(string path) => WorkspaceScope.Link(path, Workspace?.DepartmentId);
+}

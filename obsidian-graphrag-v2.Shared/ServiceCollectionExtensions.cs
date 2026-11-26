@@ -37,6 +37,7 @@ namespace ObsidianGraphRag.Shared
                     client.BaseAddress = address;
             });
             services.AddSingleton<WikiLintEngine>();
+            services.AddTransient<SourceArchiveService>();
             services.AddSingleton<SemanticNoteIndex>();
             services.AddSingleton<GraphRagOrchestrator>();
             services.AddSingleton<SiteManagerService>();

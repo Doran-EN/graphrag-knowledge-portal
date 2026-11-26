@@ -18,6 +18,18 @@ services:
       Ollama__RequestTimeoutSeconds: ${GRAPHRAG_OLLAMA_TIMEOUT_SECONDS:-180}
     volumes:
       - knowledge-data:/knowledge
+    develop:
+      watch:
+        - action: rebuild
+          path: ./obsidian-graphrag-v2.Web
+          ignore:
+            - bin/
+            - obj/
+        - action: rebuild
+          path: ./obsidian-graphrag-v2.Shared
+          ignore:
+            - bin/
+            - obj/
 
   n8n:
     image: n8nio/n8n:latest

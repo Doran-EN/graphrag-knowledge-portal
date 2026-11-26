@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Components;
 using Microsoft.JSInterop;
 using ObsidianGraphRag.Shared.Models;
+using ObsidianGraphRag.Shared.Services.Ingestion;
 using ObsidianGraphRag.Shared.Services.SiteManager;
 using ObsidianGraphRag.Shared.Services.Vault;
 
@@ -8,11 +9,17 @@ namespace ObsidianGraphRag.Shared.Pages;
 
 public partial class SiteExplorerPage : IDisposable
 {
+    [CascadingParameter]
+    public WorkspaceScope? Workspace { get; set; }
+
     [Inject]
     private SiteManagerService SiteManager { get; set; } = default!;
 
     [Inject]
     private VaultGraphEngine GraphEngine { get; set; } = default!;
+
+    [Inject]
+    private ObsidianIngestEngine IngestEngine { get; set; } = default!;
 
     [Inject]
     private IJSRuntime JS { get; set; } = default!;
@@ -28,6 +35,9 @@ public partial class SiteExplorerPage : IDisposable
     private DotNetObjectReference<SiteExplorerPage>? dotNetRef;
 
     private List<string> availableSites = new();
+    private bool sourceUnavailable;
+    private bool graphNeedsReload;
+    private string? previousSiteName;
     private string currentScope = string.Empty;
     private List<GraphGroupDto> currentGroups = new();
     private string activeGroupFilter = "all";
@@ -52,25 +62,46 @@ public partial class SiteExplorerPage : IDisposable
     {
         GraphEngine.Reload();
         availableSites = GraphEngine.DetectAllVaultSites();
-        currentScope = string.IsNullOrWhiteSpace(SiteName) ? (availableSites.FirstOrDefault() ?? string.Empty) : SiteName;
-        if (!string.IsNullOrEmpty(currentScope))
-        {
-            rootTreeNode = SiteManager.GetSiteFileTree(currentScope);
-        }
+        IngestEngine.OnSourceArchiveChanged += OnSourceArchiveChanged;
     }
+
+    protected override void OnParametersSet()
+    {
+        if (currentScope.Length > 0 && previousSiteName == SiteName)
+            return;
+
+        previousSiteName = SiteName;
+        currentScope = string.IsNullOrWhiteSpace(SiteName) ? (availableSites.FirstOrDefault() ?? "all") : SiteName;
+        sourceUnavailable = currentScope != "all" && !availableSites.Contains(currentScope, StringComparer.Ordinal);
+        UpdateFileTree();
+        graphNeedsReload = true;
+    }
+
+    private void OnSourceArchiveChanged() => _ = InvokeAsync(async () =>
+    {
+        if (dotNetRef is null || Workspace?.CanAccess() == false)
+            return;
+        OnNodeDeselected();
+        await ReloadGraph();
+        StateHasChanged();
+    });
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
         if (firstRender)
-        {
             dotNetRef = DotNetObjectReference.Create(this);
+        if (graphNeedsReload)
+        {
+            graphNeedsReload = false;
             await LoadGraph();
         }
     }
 
     private async Task LoadGraph()
     {
-        var graphData = GraphEngine.ExportGraphData(currentScope);
+        if (Workspace?.CanAccess() == false)
+            return;
+        var graphData = sourceUnavailable ? new GraphDataDto() : GraphEngine.ExportGraphData(currentScope);
         currentGroups = graphData.Groups;
         await JS.InvokeVoidAsync("initGraphView", "hyper-graph-container", graphData, dotNetRef);
     }
@@ -79,23 +110,25 @@ public partial class SiteExplorerPage : IDisposable
     {
         GraphEngine.Reload();
         availableSites = GraphEngine.DetectAllVaultSites();
-        if (currentScope != "all")
-        {
-            rootTreeNode = SiteManager.GetSiteFileTree(currentScope);
-        }
+        sourceUnavailable = currentScope != "all" && !availableSites.Contains(currentScope, StringComparer.Ordinal);
+        UpdateFileTree();
         await LoadGraph();
     }
 
     private async Task ChangeScope(string scope)
     {
+        if (scope != "all" && !availableSites.Contains(scope, StringComparer.Ordinal))
+            return;
+
         currentScope = scope;
+        sourceUnavailable = false;
         activeGroupFilter = "all";
-        if (scope != "all")
-        {
-            rootTreeNode = SiteManager.GetSiteFileTree(scope);
-        }
+        UpdateFileTree();
         await LoadGraph();
     }
+
+    private void UpdateFileTree() => rootTreeNode = sourceUnavailable || currentScope == "all"
+        ? null : SiteManager.GetSiteFileTree(currentScope);
 
     private async Task SetColorMode(string mode)
     {
@@ -212,6 +245,8 @@ public partial class SiteExplorerPage : IDisposable
     [JSInvokable]
     public void OnNodeSelected(string id, string label, string type, string summary)
     {
+        if (Workspace?.CanAccess() == false)
+            return;
         if (GraphEngine.Notes.TryGetValue(id.ToLower(), out var note))
         {
             selectedNote = note;
@@ -251,6 +286,7 @@ public partial class SiteExplorerPage : IDisposable
 
     public void Dispose()
     {
+        IngestEngine.OnSourceArchiveChanged -= OnSourceArchiveChanged;
         dotNetRef?.Dispose();
     }
 }

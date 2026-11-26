@@ -60,6 +60,13 @@ namespace ObsidianGraphRag.Shared.Services.Retrieval
             Func<ChatQueryStage, Task>? onStageChanged = null)
         {
             var result = new GraphSearchResult { Query = question };
+            var archive = SourceArchive.Read(_graphEngine.RootPath);
+            if ((document is not null && archive.ContainsPath(document.RawPathPrefix)) ||
+                (sourceType == ChatSourceType.Websites && archive.ContainsWebsite(siteFilter)))
+            {
+                result.Answer = "This source is archived and unavailable for search.";
+                return result;
+            }
             result.ReasoningPath.Add($"[Step 1] Analyzing query intent & extracting key entities from: \"{question}\"");
 
             var extractPrompt = "Extract 2-4 primary entity names, product names, or business concepts from the question. Return strictly JSON array of strings: [\"Entity1\", \"Entity2\"]";

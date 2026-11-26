@@ -123,14 +123,14 @@ a {
 }
 
 @media (max-width: 820px) {
-    .app-shell:has(.ingest-container) {
+    .app-shell:has(.ingest-container, .user-control) {
         flex-direction: column;
         width: 100%;
         height: auto;
         min-height: 100vh;
     }
 
-    .app-shell:has(.ingest-container) .app-sidebar {
+    .app-shell:has(.ingest-container, .user-control) .app-sidebar {
         width: 100%;
         padding: 12px 16px;
         gap: 8px;
@@ -138,18 +138,18 @@ a {
         border-bottom: 1px solid var(--border-color);
     }
 
-    .app-shell:has(.ingest-container) .nav-menu {
+    .app-shell:has(.ingest-container, .user-control) .nav-menu {
         flex-direction: row;
         flex-wrap: wrap;
     }
 
-    .app-shell:has(.ingest-container) .nav-link-custom {
+    .app-shell:has(.ingest-container, .user-control) .nav-link-custom {
         flex: 0 0 auto;
         padding: 7px 9px;
         font-size: 12px;
     }
 
-    .app-shell:has(.ingest-container) .app-content {
+    .app-shell:has(.ingest-container, .user-control) .app-content {
         overflow-y: visible;
         padding: 16px;
     }

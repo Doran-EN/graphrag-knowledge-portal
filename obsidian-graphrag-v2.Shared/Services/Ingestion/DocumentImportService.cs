@@ -16,7 +16,7 @@ public sealed class DocumentImportService(HttpClient client, VaultGraphEngine gr
 
     public bool IsConfigured => client.BaseAddress is not null;
 
-    public IReadOnlyList<UploadedDocument> GetUploadedDocuments()
+    public IReadOnlyList<UploadedDocument> GetUploadedDocuments(bool includeArchived = false)
     {
         var collection = Path.Combine(graph.RootPath, "raw", Collection);
         var documents = new List<UploadedDocument>();
@@ -26,6 +26,9 @@ public sealed class DocumentImportService(HttpClient client, VaultGraphEngine gr
         const string firstPartSuffix = " (part 1)";
         foreach (var folder in Directory.EnumerateDirectories(collection))
         {
+            var archived = SourceArchive.IsArchived(folder);
+            if (archived && !includeArchived)
+                continue;
             var firstPart = Path.Combine(folder, "part-0001.md");
             try
             {
@@ -34,7 +37,7 @@ public sealed class DocumentImportService(HttpClient client, VaultGraphEngine gr
                 if (title.EndsWith(firstPartSuffix, StringComparison.Ordinal))
                     title = title[..^firstPartSuffix.Length];
                 if (AcceptedExtensions.Split(',').Contains(Path.GetExtension(title).ToLowerInvariant()))
-                    documents.Add(new UploadedDocument(Path.GetFileName(folder), title));
+                    documents.Add(new UploadedDocument(Path.GetFileName(folder), title, archived));
             }
             catch (IOException)
             {
@@ -80,7 +83,11 @@ public sealed class DocumentImportService(HttpClient client, VaultGraphEngine gr
             var id = $"{fileKey}-{Convert.ToHexStringLower(hash)}";
             var destination = Path.Combine(collection, id);
             if (Directory.Exists(destination))
+            {
+                if (SourceArchive.IsArchived(destination))
+                    throw new InvalidOperationException("This document is archived. Restore it under Managed Websites → Uploaded documents.");
                 return (id, fileName, 0, true);
+            }
 
             var markdown = await ConvertAsync(originalPath, fileName, cancellation);
             var sections = SplitMarkdown(markdown).ToList();
@@ -103,6 +110,8 @@ public sealed class DocumentImportService(HttpClient client, VaultGraphEngine gr
             }
             catch (IOException) when (Directory.Exists(destination))
             {
+                if (SourceArchive.IsArchived(destination))
+                    throw new InvalidOperationException("This document is archived. Restore it under Managed Websites → Uploaded documents.");
                 return (id, fileName, 0, true);
             }
 
@@ -173,7 +182,7 @@ public sealed class DocumentImportService(HttpClient client, VaultGraphEngine gr
 
     private sealed record ConvertedDocument([property: JsonPropertyName("md_content")] string Markdown);
 
-    public sealed record UploadedDocument(string Id, string FileName)
+    public sealed record UploadedDocument(string Id, string FileName, bool IsArchived = false)
     {
         internal string RawPathPrefix => $"raw/{Collection}/{Id}/";
     }

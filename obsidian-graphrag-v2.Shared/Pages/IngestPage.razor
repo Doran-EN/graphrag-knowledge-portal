@@ -1,6 +1,7 @@
 @page "/ingest"
 @namespace ObsidianGraphRag.Shared.Pages
 @using Microsoft.AspNetCore.Components.Forms
+@using ObsidianGraphRag.Shared.Services.N8n
 
 <PageTitle>Knowledge Ingest | GraphRAG Portal</PageTitle>
 
@@ -8,7 +9,14 @@
     <header class="ingest-hero">
         <div>
             <h1>Knowledge Ingest</h1>
-            <p>Upload a document or crawl a website, then choose what to process into your knowledge graph.</p>
+            @if (Workspace is not null)
+            {
+                <p>Documents and crawls are saved to <strong>@Workspace.Name</strong>. Use the sidebar to change the destination.</p>
+            }
+            else
+            {
+                <p>Upload a document or crawl a website, then choose what to process into your knowledge graph.</p>
+            }
         </div>
         <dl class="source-counts" aria-label="Available sources">
             <div><dt>Uploaded documents</dt><dd>@uploadedDocuments.Count</dd></div>
@@ -59,7 +67,7 @@
                     <span class="source-icon website-icon" aria-hidden="true"><i></i></span>
                     <div>
                         <h3 id="website-crawl-title">Crawl a website</h3>
-                        <p>Collect pages from a website.</p>
+                        <p>Collect up to @N8nCrawlService.SectionPageLimit pages under the URL you enter.</p>
                     </div>
                     <span class="status-chip @(isN8nOnline == true ? "positive" : "")">
                         @(isN8nOnline switch { true => "Crawler online", false => "Crawler offline", null => "Checking crawler…" })
@@ -78,16 +86,50 @@
                     </span>
                 </div>
                 <div class="source-footer">
-                    <button class="secondary-action" type="button" @onclick="TriggerN8nCrawl" disabled="@(CrawlControlsBusy || !HasValidUrl)">
-                        @(N8nService.IsBusy ? "Crawling…" : crawlStatus is { NeedsAttention: true, IngestSite: null } ? "Retry crawl" : "Start crawl")
-                    </button>
-                </div>
-                <div role="status">
-                    @if (crawlStatus is { } status)
+                    @if (crawlStatus?.Progress is { } activeProgress)
                     {
-                        <div class="source-status @(status.IsRunning ? "running" : status.NeedsAttention ? "warning" : "success")">@status.Message</div>
+                        <button class="secondary-action cancel-crawl" type="button" @onclick="() => CancelCrawl(activeProgress.StartedAt)">Cancel crawl</button>
+                    }
+                    else
+                    {
+                        <button class="secondary-action" type="button" @onclick="TriggerN8nCrawl" disabled="@(CrawlControlsBusy || !HasValidUrl)">
+                            @(crawlStatus is { NeedsAttention: true, IngestSite: null } ? "Retry crawl" : "Start crawl")
+                        </button>
                     }
                 </div>
+                @if (crawlStatus is { } status)
+                {
+                    <div class="source-status crawl-status @(status.IsRunning ? "running" : status.NeedsAttention ? "warning" : "success")">
+                        <strong role="status">@status.Message</strong>
+                        @if (status.Progress is { } progress)
+                        {
+                            var now = DateTimeOffset.UtcNow;
+                            @if (progress.TotalPages is > 0 and var total)
+                            {
+                                <progress class="ingest-progress" aria-label="Website pages checked" value="@progress.CheckedPages" max="@total"></progress>
+                            }
+                            else if (progress.TotalPages is null)
+                            {
+                                <progress class="ingest-progress" aria-label="Website crawl in progress"></progress>
+                            }
+                            <p class="crawl-detail">@CrawlStageDetail(progress)</p>
+                            <dl class="crawl-metrics">
+                                @if (progress.TotalPages is { } queued)
+                                {
+                                    <div><dt>Pages checked</dt><dd>@progress.CheckedPages / @queued</dd></div>
+                                    <div><dt>Pages failed</dt><dd>@progress.FailedPages</dd></div>
+                                }
+                                <div><dt>Pages saved</dt><dd>@progress.SavedPages</dd></div>
+                                <div><dt>Elapsed</dt><dd>@FormatCrawlTime(now - progress.StartedAt)</dd></div>
+                                <div><dt>Last update</dt><dd>@FormatCrawlTime(now - progress.LastUpdateAt) ago</dd></div>
+                            </dl>
+                        }
+                        else if (status.Elapsed is { } elapsed)
+                        {
+                            <p class="crawl-detail">Elapsed @FormatCrawlTime(elapsed)</p>
+                        }
+                    </div>
+                }
             </section>
         </div>
     </section>

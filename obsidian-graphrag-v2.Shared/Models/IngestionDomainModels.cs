@@ -152,9 +152,10 @@ namespace ObsidianGraphRag.Shared.Models
             }
         }
 
-        public List<object> GetRichCatalogContext(int maxItems = 120)
+        public List<object> GetRichCatalogContext(int maxItems = 120, Func<KnowledgeCatalogEntry, bool>? include = null)
         {
             return _canonicalMap.Values
+                .Where(entry => include?.Invoke(entry) ?? true)
                 .Take(maxItems)
                 .Select(e => new
                 {

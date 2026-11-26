@@ -6,10 +6,14 @@
             <span class="brand-icon">🔮</span>
             <span class="brand-title">GraphRAG Portal</span>
         </div>
+        @WorkspaceSelector
         <NavMenu />
-        @if (ShowPortalAccount)
+        @if (PortalAccountName is not null)
         {
-            <a class="nav-link-custom" href="/account/manage" data-enhance-nav="false">Your account</a>
+            <a class="nav-link-custom sidebar-account" href="/account/manage" data-enhance-nav="false">
+                <strong>@PortalAccountName</strong>
+                <span>Your account</span>
+            </a>
         }
     </div>
 
@@ -19,6 +23,9 @@
 </div>
 
 @code {
-    [CascadingParameter(Name = "ShowPortalAccount")]
-    public bool ShowPortalAccount { get; set; }
+    [CascadingParameter(Name = "PortalAccountName")]
+    public string? PortalAccountName { get; set; }
+
+    [CascadingParameter(Name = "WorkspaceSelector")]
+    public RenderFragment? WorkspaceSelector { get; set; }
 }

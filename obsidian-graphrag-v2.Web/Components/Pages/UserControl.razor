@@ -1,0 +1,255 @@
+@page "/user-control"
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.AspNetCore.Components.Authorization
+@using ObsidianGraphRag.Shared.Models
+@using obsidian_graphrag_v2.Web.Services
+@using static obsidian_graphrag_v2.Web.Services.PortalAccounts.AccountStatus
+@attribute [Authorize(Roles = "Owner")]
+@inject PortalAccounts Accounts
+@inject AuthenticationStateProvider Authentication
+
+<PageTitle>User Control | GraphRAG Portal</PageTitle>
+
+<div class="user-control">
+    <header class="header-section">
+        <div>
+            <h1 class="page-title">User Control</h1>
+            <p class="page-subtitle">Manage account requests and departments.</p>
+        </div>
+        <div class="header-metrics">
+            <span class="metric-badge">@users.Count(user => user.Status == Pending) pending</span>
+            <span class="metric-badge"><span class="dot-green" aria-hidden="true"></span>@users.Count(user => user.Status == Active) active</span>
+        </div>
+    </header>
+
+    <nav class="control-tabs" aria-label="User Control sections">
+        <a href="@WorkspaceScope.Link("/user-control", Workspace?.DepartmentId)" class="@(ShowDepartments ? "btn-secondary" : "btn-primary")"
+           aria-current="@(!ShowDepartments ? "page" : null)">User accounts</a>
+        <a href="@WorkspaceScope.Link("/user-control?tab=departments", Workspace?.DepartmentId)" class="@(ShowDepartments ? "btn-primary" : "btn-secondary")"
+           aria-current="@(ShowDepartments ? "page" : null)">Departments</a>
+    </nav>
+
+    @if (ShowDepartments)
+    {
+        <section class="control-card" aria-labelledby="departments-heading">
+            <div class="card-heading">
+                <h2 id="departments-heading">Departments</h2>
+            </div>
+            <form class="department-form" @onsubmit="CreateDepartmentAsync" @onsubmit:preventDefault>
+                <label for="department-name">Department name</label>
+                <input id="department-name" @bind="departmentName" required maxlength="80" />
+                <label for="department-description">Description (optional)</label>
+                <input id="department-description" @bind="departmentDescription" maxlength="240" />
+                <button type="submit" class="btn-primary">Add department</button>
+            </form>
+            @if (departmentMessage is not null)
+            {
+                <p class="feedback" role="status">@departmentMessage</p>
+            }
+            @if (departments.Count == 0)
+            {
+                <p class="account-detail">No departments yet.</p>
+            }
+            else
+            {
+                <ul class="department-list" aria-label="Existing departments">
+                    @foreach (var department in departments)
+                    {
+                        <li @key="department.Id">
+                            <strong>@department.Name</strong>
+                            @if (!string.IsNullOrEmpty(department.Description))
+                            {
+                                <span class="account-detail">@department.Description</span>
+                            }
+                        </li>
+                    }
+                </ul>
+            }
+        </section>
+    }
+
+    <section class="control-card" hidden="@ShowDepartments" aria-labelledby="accounts-heading">
+        <div class="card-heading">
+            <div>
+                <h2 id="accounts-heading">User accounts</h2>
+                <p>@(users.Any(user => user.Status == Pending) ? "Select a department before approving a request." : "No pending requests.")</p>
+                @if (departments.Count == 0)
+                {
+                    <p><a href="@WorkspaceScope.Link("/user-control?tab=departments", Workspace?.DepartmentId)">Add a department</a> to start assigning users.</p>
+                }
+            </div>
+            <button type="button" class="btn-secondary" @onclick="RefreshUsersAsync">Refresh accounts</button>
+        </div>
+        @if (reviewMessage is not null)
+        {
+            <p class="feedback" role="status">@reviewMessage</p>
+        }
+        <div class="account-table">
+            <table aria-labelledby="accounts-heading">
+                <thead>
+                    <tr>
+                        <th scope="col">Account</th>
+                        <th scope="col">Status</th>
+                        <th scope="col">Department</th>
+                        <th scope="col">Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var user in users)
+                    {
+                        var selectedDepartment = departmentSelections.GetValueOrDefault(user.Id, user.DepartmentId ?? "");
+                        <tr @key="user.Id">
+                            <th scope="row">
+                                <span class="account-login">@user.DisplayName</span>
+                                @if (user.DisplayName != user.Login)
+                                {
+                                    <span class="account-detail">@user.Login</span>
+                                }
+                                @if (user.Owner)
+                                {
+                                    <span class="account-detail">Portal owner</span>
+                                }
+                                else if (user.RequestedAt is { } requested)
+                                {
+                                    <time class="account-detail" datetime="@requested.ToString("O")">Requested @requested.ToUniversalTime().ToString("dd MMM yyyy") (UTC)</time>
+                                }
+                            </th>
+                            <td><span class="account-status @user.Status.ToString().ToLowerInvariant()">@user.Status</span></td>
+                            <td>
+                                @if (!user.Owner && (user.Status is Active or Pending) && departments.Count > 0)
+                                {
+                                    <select class="department-select" aria-label="Department for @user.Login"
+                                            @bind:get="selectedDepartment" @bind:set="value => departmentSelections[user.Id] = value ?? string.Empty">
+                                        <option value="" disabled>@(user.Status == Pending ? "Select department" : "Unassigned")</option>
+                                        @foreach (var department in departments)
+                                        {
+                                            <option value="@department.Id">@department.Name</option>
+                                        }
+                                    </select>
+                                }
+                                else
+                                {
+                                    <span class="account-detail">@(!user.Owner && user.Status == Active ? "Unassigned" : "—")</span>
+                                }
+                            </td>
+                            <td>
+                                @if (user.Status == Pending)
+                                {
+                                    <div class="review-actions">
+                                        <button type="button" class="btn-secondary approve" aria-label="Approve and assign @user.Login"
+                                                disabled="@(selectedDepartment.Length == 0)"
+                                                @onclick="() => ReviewAsync(user, approve: true, selectedDepartment)">Approve and assign</button>
+                                        <button type="button" class="btn-secondary reject" aria-label="Reject @user.Login"
+                                                @onclick="() => ReviewAsync(user, approve: false)">Reject</button>
+                                    </div>
+                                }
+                                else if (!user.Owner && user.Status == Active && departments.Count > 0)
+                                {
+                                    <button type="button" class="btn-secondary" aria-label="Save department for @user.Login"
+                                            disabled="@(selectedDepartment.Length == 0 || selectedDepartment == user.DepartmentId)"
+                                            @onclick="() => AssignDepartmentAsync(user, selectedDepartment)">Save department</button>
+                                }
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </section>
+</div>
+
+@code {
+    [CascadingParameter]
+    public WorkspaceScope? Workspace { get; set; }
+
+    [SupplyParameterFromQuery(Name = "tab")]
+    private string? Tab { get; set; }
+
+    private bool ShowDepartments => Tab == "departments";
+    private IReadOnlyList<PortalAccounts.UserAccount> users = [];
+    private IReadOnlyList<PortalAccounts.Department> departments = [];
+    private readonly Dictionary<string, string> departmentSelections = new();
+    private string departmentName = "";
+    private string departmentDescription = "";
+    private string? departmentMessage;
+    private string? reviewMessage;
+
+    protected override async Task OnInitializedAsync() => await LoadDataAsync();
+
+    private async Task LoadDataAsync()
+    {
+        var owner = (await Authentication.GetAuthenticationStateAsync()).User;
+        users = Accounts.GetUsers(owner);
+        departments = Accounts.GetDepartments(owner);
+    }
+
+    private async Task CreateDepartmentAsync()
+    {
+        try
+        {
+            var owner = (await Authentication.GetAuthenticationStateAsync()).User;
+            departmentMessage = Accounts.CreateDepartment(owner, departmentName, departmentDescription);
+            departments = Accounts.GetDepartments(owner);
+            if (departmentMessage is null)
+            {
+                departmentMessage = $"{departmentName.Trim()} was added.";
+                departmentName = "";
+                departmentDescription = "";
+            }
+        }
+        catch (IOException)
+        {
+            departmentMessage = "The department could not be saved or refreshed. Reload the page to check.";
+        }
+    }
+
+    private async Task RefreshUsersAsync()
+    {
+        try
+        {
+            await LoadDataAsync();
+            departmentSelections.Clear();
+            reviewMessage = "Accounts refreshed.";
+        }
+        catch (IOException)
+        {
+            reviewMessage = "The account list could not be refreshed. Please try again.";
+        }
+    }
+
+    private async Task ReviewAsync(PortalAccounts.UserAccount user, bool approve, string? departmentId = null)
+    {
+        try
+        {
+            var owner = (await Authentication.GetAuthenticationStateAsync()).User;
+            var reviewed = Accounts.ReviewRequest(owner, user.Id, approve, departmentId);
+            users = Accounts.GetUsers(owner);
+            departmentSelections.Remove(user.Id);
+            reviewMessage = reviewed
+                ? $"{user.Login} {(approve ? "was approved and can now sign in." : "was rejected.")}"
+                : "The request could not be reviewed. Refresh accounts to check its status and department.";
+        }
+        catch (IOException)
+        {
+            reviewMessage = "The account list or decision could not be saved or refreshed. Refresh accounts to check the current status.";
+        }
+    }
+
+    private async Task AssignDepartmentAsync(PortalAccounts.UserAccount user, string departmentId)
+    {
+        try
+        {
+            var owner = (await Authentication.GetAuthenticationStateAsync()).User;
+            var assigned = Accounts.AssignDepartment(owner, user.Id, departmentId);
+            users = Accounts.GetUsers(owner);
+            departmentSelections.Remove(user.Id);
+            reviewMessage = assigned
+                ? $"Department saved for {user.Login}."
+                : "The department could not be assigned. Refresh accounts and try again.";
+        }
+        catch (IOException)
+        {
+            reviewMessage = "The department assignment could not be saved or refreshed. Refresh accounts to check.";
+        }
+    }
+}

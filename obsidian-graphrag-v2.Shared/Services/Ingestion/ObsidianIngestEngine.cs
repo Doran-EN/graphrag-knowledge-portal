@@ -20,11 +20,29 @@ namespace ObsidianGraphRag.Shared.Services.Ingestion
 
         public IngestJobStatus CurrentJob { get; private set; } = new();
         public event Action? OnProgressChanged;
+        public event Action? OnSourceArchiveChanged;
 
         public ObsidianIngestEngine(VaultGraphEngine graphEngine, ILlmClient llmClient)
         {
             _graphEngine = graphEngine;
             _llmClient = llmClient;
+        }
+
+        internal void SetSourceArchived(string site, string? documentId, bool archived)
+        {
+            if (!IsDirectoryName(site) || (site == DocumentImportService.Collection) != (documentId is not null) ||
+                (documentId is not null && !IsDirectoryName(documentId)))
+                throw new ArgumentException("Invalid source.");
+
+            lock (_jobLock)
+            {
+                if (CurrentJob.IsRunning)
+                    throw new InvalidOperationException("Wait for ingestion to finish before changing the archive.");
+
+                var directory = Path.Combine(_graphEngine.RootPath, "raw", site);
+                SourceArchive.SetArchived(documentId is null ? directory : Path.Combine(directory, documentId), archived);
+            }
+            OnSourceArchiveChanged?.Invoke();
         }
 
         public async Task RunIngestAsync(string siteName, string targetName, string? documentId = null, bool reprocess = false)
@@ -53,8 +71,10 @@ namespace ObsidianGraphRag.Shared.Services.Ingestion
                     throw new ArgumentException("Invalid ingestion source.");
                 var rawSiteDir = Path.Combine(vaultPath, "raw", siteName);
                 var inputDirectory = documentId is null ? rawSiteDir : Path.Combine(rawSiteDir, documentId);
+                var archive = SourceArchive.Read(vaultPath);
                 var rawFiles = Directory.Exists(inputDirectory)
-                    ? Directory.GetFiles(inputDirectory, "*.md", SearchOption.AllDirectories)
+                    ? Directory.EnumerateFiles(inputDirectory, "*.md", SearchOption.AllDirectories)
+                        .Where(file => !archive.ContainsPath(Path.GetRelativePath(vaultPath, file))).ToArray()
                     : [];
                 Array.Sort(rawFiles, StringComparer.Ordinal);
                 if (rawFiles.Length == 0)
@@ -276,7 +296,8 @@ namespace ObsidianGraphRag.Shared.Services.Ingestion
             // to maximize usable knowledge extraction context and prevent URL token waste.
             var sanitizedContent = mediaResult.SanitizedContentForLlm;
             var trimmed = sanitizedContent.Length > 3000 ? sanitizedContent[..3000] : sanitizedContent;
-            var richCatalogContext = catalog.GetRichCatalogContext(100);
+            var archive = SourceArchive.Read(vaultPath);
+            var richCatalogContext = catalog.GetRichCatalogContext(100, entry => !entry.Sources.Any(archive.ContainsPath));
             var richCatalogJson = JsonSerializer.Serialize(richCatalogContext);
 
             var systemPrompt = $@"You are a production-grade knowledge engineering compiler adhering strictly to TheSchema.md conventions.

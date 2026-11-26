@@ -18,19 +18,20 @@ namespace ObsidianGraphRag.Shared.Services.SiteManager
             _graphEngine = graphEngine;
         }
 
-        public List<string> GetSiteNames()
+        public List<string> GetSiteNames(bool includeArchived = false)
         {
             var rawDir = Path.Combine(_graphEngine.RootPath, "raw");
             if (!Directory.Exists(rawDir))
                 return new List<string>();
 
+            var archive = SourceArchive.Read(_graphEngine.RootPath);
             return Directory.GetDirectories(rawDir)
                 .Select(Path.GetFileName)
-                .Where(s => !string.IsNullOrEmpty(s))
+                .Where(s => !string.IsNullOrEmpty(s) && (includeArchived || !archive.ContainsWebsite(s)))
                 .ToList()!;
         }
 
-        public List<SiteKnowledgeSummary> GetAllManagedSites()
+        public List<SiteKnowledgeSummary> GetAllManagedSites(bool includeArchived = false)
         {
             var vaultPath = _graphEngine.RootPath;
             var list = new List<SiteKnowledgeSummary>();
@@ -40,12 +41,26 @@ namespace ObsidianGraphRag.Shared.Services.SiteManager
                 return list;
 
             var siteDirs = Directory.GetDirectories(rawDir);
+            var archive = SourceArchive.Read(vaultPath);
             foreach (var sDir in siteDirs)
             {
                 var sName = Path.GetFileName(sDir);
                 if (string.IsNullOrEmpty(sName)) continue;
+                if (archive.ContainsWebsite(sName))
+                {
+                    if (includeArchived)
+                        list.Add(new SiteKnowledgeSummary
+                        {
+                            SiteName = sName,
+                            BaseUrl = ResolveSiteUrl(sDir, [], sName),
+                            SyncStatus = "Archived",
+                            IsArchived = true
+                        });
+                    continue;
+                }
 
-                var rawFiles = Directory.GetFiles(sDir, "*.md", SearchOption.AllDirectories);
+                var rawFiles = Directory.EnumerateFiles(sDir, "*.md", SearchOption.AllDirectories)
+                    .Where(path => !archive.ContainsPath(Path.GetRelativePath(vaultPath, path))).ToArray();
 
                 // Discover accurate baseUrl from _crawl_report.json or _crawl_index.json or raw markdown
                 string baseUrl = sName == DocumentImportService.Collection ? "" : ResolveSiteUrl(sDir, rawFiles, sName);
@@ -189,11 +204,13 @@ namespace ObsidianGraphRag.Shared.Services.SiteManager
         {
             var vaultPath = _graphEngine.RootPath;
             var root = new SiteFileTreeNode { Name = siteName, Path = siteName, Type = "folder" };
+            if (!GetSiteNames().Contains(siteName, StringComparer.Ordinal))
+                return root;
 
             // 1. Raw Node
             var rawNode = new SiteFileTreeNode { Name = "raw", Path = $"raw/{siteName}", Type = "folder" };
             var rawSitePath = Path.Combine(vaultPath, "raw", siteName);
-            if (Directory.Exists(rawSitePath))
+            if (!SourceArchive.Read(vaultPath).ContainsWebsite(siteName) && Directory.Exists(rawSitePath))
             {
                 foreach (var f in Directory.GetFiles(rawSitePath, "*.md"))
                 {
@@ -229,7 +246,7 @@ namespace ObsidianGraphRag.Shared.Services.SiteManager
                                          noteName.Contains(siteName, StringComparison.OrdinalIgnoreCase);
                         }
 
-                        if (isRelevant)
+                        if (isRelevant && _graphEngine.Notes.ContainsKey(relPath[..^3]))
                         {
                             subNode.Children.Add(new SiteFileTreeNode
                             {

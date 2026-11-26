@@ -39,6 +39,16 @@ docker compose up -d --build web docling
 docker compose ps
 ```
 
+### Rebuild automatically during development
+
+From the directory containing `compose.yaml`, start Compose Watch in a PowerShell window:
+
+```powershell
+docker compose -p obsidian-graphrag watch web
+```
+
+Keep that window open while editing. Compose rebuilds the web container when you save changes to the Web or Shared projects. Refresh the portal when the rebuild finishes. Each rebuild restarts the web app, so sign in again if prompted. You can stop watching with **Ctrl+C**. Start the watcher again at the beginning of your next development session.
+
 ### Try a document
 
 Get the one-time owner setup code after the portal starts:
@@ -47,7 +57,7 @@ Get the one-time owner setup code after the portal starts:
 docker compose exec -T web cat /knowledge/.accounts/owner-setup
 ```
 
-1. Open the [local portal](http://localhost:18082), choose an email and password, and enter the setup code.
+1. Open the [local portal](http://localhost:18082), choose a username, email, and password, and enter the setup code.
 2. In **Knowledge Ingest**, upload the [sample PDF](output/pdf/graph-rag-demo.pdf) and click **Convert and import**.
 3. With the PDF selected under **Run ingestion**, keep **New and changed content** selected and click **Run ingestion**. Wait for **Completed** and **1 / 1**.
 4. In **AI Assistant Chat**, set **Search in → Documents** and select the sample PDF. Ask **“How long is the Blue Lantern Workshop, and what is the registration fee per participant?”** The expected answer is **75 minutes** and **RM120 per participant**, with a citation to the PDF that supports both facts.
@@ -63,6 +73,10 @@ docker compose up -d n8n crawl4ai
 3. In the portal's **Knowledge Ingest** page, enter `https://example.com` and click **Start crawl**. Wait for **Ready to ingest** and for the portal to select **example** automatically. Click **Run ingestion** and wait for **Completed**.
 4. In **AI Assistant Chat**, set **Search in → Websites → example**. Ask **“What is Example Domain intended to be used for?”** The expected answer is that it is intended for documentation examples, with a citation to the crawled content.
 
+For an existing installation, unpublish the previous workflow before publishing the bundled replacement, which uses the same webhook URL. Reuse the existing **Header Auth** credential on **Crawl4AI (/crawl)**.
+
+The crawler checks up to 25 pages under the submitted path. The progress panel shows pages checked, saved, and failed. The workflow runs for up to five minutes. Select **Cancel crawl** to release the workspace and keep pages already saved for ingestion. The bundled workflow exits when its next progress update sees that the run has ended.
+
 ## Configuration and storage
 
 The web app uses Ollama on Windows through `host.docker.internal:11434` and defaults to `qwen3.5:4b`. Set `GRAPHRAG_OLLAMA_URL` or `GRAPHRAG_OLLAMA_MODEL` in `.env` if your endpoint or model differs.
@@ -72,9 +86,15 @@ Chat combines keyword matches with semantic passage search using the local Ollam
 
 The portal starts the published n8n workflow at `/webhook/graphrag-private-crawl`. The workflow verifies a temporary crawl grant with the web container on port 8081 and uses it to save pages, indexes, and reports inside the requesting account's workspace.
 
-The Compose volume `obsidian-graphrag_knowledge-data` is mounted at `/knowledge`. On an existing installation, owner setup copies the existing knowledge base into the owner's workspace. Use **Your account → Create invitation** to generate a single-use code that expires after 24 hours. The invited user enters it on the **Have an invitation?** page and starts with an empty workspace.
+The Compose volume `obsidian-graphrag_knowledge-data` is mounted at `/knowledge`. On an existing installation, owner setup copies the existing knowledge base into the owner's workspace. The owner can create departments under **User Control → Departments**. Anyone who can reach the portal can select **Request an account** on the sign-in page and enter a username, email, and password. The username appears in the sidebar and the email is used to sign in. In **User Control**, the owner reviews pending requests, selects a department, and clicks **Approve and assign** or rejects the request. Approved users can sign in to their private workspace. The owner can also assign or change a department for an existing account.
 
-Each account uses its own directory under `/knowledge/.workspaces/`. Crawled pages and uploads live under that workspace's `raw/`, generated notes and ingestion logs under `wiki/`, and semantic search data under `.semantic/`. The account database and workspaces persist across container restarts. Sign in again after the web container restarts.
+### Personal and department workspaces
+
+- **My workspace** is the default and uses the account's private knowledge base. Choose a department in the sidebar before uploading a document or starting a crawl to share it with that department.
+- Managed Websites, Graph Explorer, Wiki Lint, and AI Assistant Chat use the selected workspace. Each department is available to its assigned members and the owner. A department change ends the user's current sessions, so they sign in again to see the new workspace.
+- The owner can use **Publish to department** on an existing website in **Managed Websites → My workspace**. The portal copies the crawled pages to the selected department and runs ingestion there. Existing websites at the destination are preserved. For a document, switch to the destination workspace before uploading the version that should be shared.
+
+Personal workspaces are stored under `/knowledge/.workspaces/` and department workspaces under `/knowledge/.departments/`. Crawled pages and uploads live in each workspace's `raw/`, generated notes and ingestion logs under `wiki/`, and semantic search data under `.semantic/`. The account database and workspaces persist across container restarts. Sign in again after the web container restarts.
 
 In **Knowledge Ingest**, use the crawl form for websites or **Document Import** for PDF, Word, Excel, PowerPoint, and supported images up to 20 MB. Docling converts each upload to Markdown. The original and Markdown sections live under `raw/documents/`. Chat searches websites and uploaded documents together by default. The **Uploaded documents** filter limits the search to that collection. Run incremental ingest on **documents** to extract entities and links into the wiki.
 

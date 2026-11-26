@@ -12,6 +12,10 @@
             </div>
             <div class="scope-selector-container">
                 <select class="scope-select" value="@currentScope" @onchange="(e) => ChangeScope(e.Value?.ToString() ?? currentScope)">
+                    @if (sourceUnavailable)
+                    {
+                        <option value="@currentScope" disabled>Source unavailable in this workspace</option>
+                    }
                     <option value="all">🌐 All Websites (全网知识库)</option>
                     @foreach (var s in availableSites)
                     {

@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
 using ObsidianGraphRag.Shared.Models;
+using ObsidianGraphRag.Shared.Services.Ingestion;
 using YamlDotNet.Serialization;
 using YamlDotNet.Serialization.NamingConventions;
 
@@ -85,6 +86,8 @@ namespace ObsidianGraphRag.Shared.Services.Vault
                 }
             }
 
+            ApplySourceArchive();
+
             // 2. Second Pass: Resolve WikiLinks and build Graph edges
             foreach (var (key, note) in Notes)
             {
@@ -99,6 +102,52 @@ namespace ObsidianGraphRag.Shared.Services.Vault
                             Notes[resolvedKey].IncomingLinks.Add(key);
                     }
                 }
+            }
+        }
+
+        private void ApplySourceArchive()
+        {
+            var archive = SourceArchive.Read(RootPath);
+            if (!archive.HasSources)
+                return;
+
+            // A shared graph note can contain facts or aliases from any of its sources.
+            var hidden = Notes.Where(pair => archive.Excludes(pair.Value) ||
+                    (pair.Value.RelativePath.StartsWith("wiki/", StringComparison.OrdinalIgnoreCase) &&
+                     pair.Value.NoteName.Equals("log", StringComparison.OrdinalIgnoreCase)))
+                .Select(pair => pair.Key).ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var (key, note) in Notes)
+            {
+                if (hidden.Contains(key) || note.NoteType == TheSchemaDefinitions.TypeRaw)
+                    continue;
+
+                // Index entries copy summaries onto the same line as the corresponding wiki link.
+                bool ReferencesHidden(string link) => archive.ContainsPath(link) ||
+                    ResolveLink(note, link) is { } target && hidden.Contains(target);
+                var removed = note.OutgoingLinks.RemoveAll(ReferencesHidden);
+                if (removed > 0)
+                {
+                    string StripLines(string text) => string.Join('\n', text.Split('\n').Where(line =>
+                        !WikiLinkRegex.Matches(line).Any(match => ReferencesHidden(match.Groups[1].Value.Trim()))));
+                    note.Content = StripLines(note.Content);
+                    note.BodyContent = StripLines(note.BodyContent);
+                }
+            }
+
+            foreach (var key in hidden)
+            {
+                Notes.Remove(key);
+                _outgoingEdges.Remove(key);
+                _incomingEdges.Remove(key);
+            }
+            _nameToKeyMap.Clear();
+            _aliasToKeyMap.Clear();
+            foreach (var (key, note) in Notes)
+            {
+                _nameToKeyMap[note.NoteName] = key;
+                foreach (var alias in note.Aliases)
+                    _aliasToKeyMap[alias] = key;
             }
         }
 
@@ -274,13 +323,14 @@ namespace ObsidianGraphRag.Shared.Services.Vault
         public List<string> DetectAllVaultSites()
         {
             var sites = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var archive = SourceArchive.Read(RootPath);
             var rawDir = Path.Combine(RootPath, "raw");
             if (Directory.Exists(rawDir))
             {
                 foreach (var dir in Directory.GetDirectories(rawDir))
                 {
                     var name = Path.GetFileName(dir);
-                    if (!name.StartsWith(".") && !name.StartsWith("_"))
+                    if (!name.StartsWith(".") && !name.StartsWith("_") && !archive.ContainsWebsite(name))
                         sites.Add(name);
                 }
             }
@@ -291,7 +341,7 @@ namespace ObsidianGraphRag.Shared.Services.Vault
                 foreach (var dir in Directory.GetDirectories(sourcesDir))
                 {
                     var name = Path.GetFileName(dir);
-                    if (!name.StartsWith(".") && !name.StartsWith("_"))
+                    if (!name.StartsWith(".") && !name.StartsWith("_") && !archive.ContainsWebsite(name))
                         sites.Add(name);
                 }
             }
@@ -354,6 +404,8 @@ namespace ObsidianGraphRag.Shared.Services.Vault
             var dto = new GraphDataDto();
             var filterLower = (siteFilter ?? "").Trim().ToLower();
             if (filterLower == "all") filterLower = "";
+            if (filterLower.Length > 0 && SourceArchive.Read(RootPath).ContainsWebsite(filterLower))
+                return dto;
 
             var knownSites = DetectAllVaultSites();
             var groupColors = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);

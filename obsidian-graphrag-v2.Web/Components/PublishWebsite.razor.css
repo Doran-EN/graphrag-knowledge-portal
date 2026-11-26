@@ -1,0 +1,38 @@
+.publish-website {
+    border-top: 1px solid var(--border-color);
+    padding-top: 10px;
+    margin-top: 10px;
+    font-size: 13px;
+    color: var(--text-secondary);
+}
+
+.publish-website summary {
+    color: var(--text-primary);
+    cursor: pointer;
+    font-weight: 600;
+}
+
+.publish-website label {
+    display: grid;
+    gap: 5px;
+    margin-block: 10px;
+}
+
+.publish-website select {
+    padding: 8px;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    background: var(--bg-card);
+    color: var(--text-primary);
+}
+
+.publish-website p,
+.publish-website a {
+    margin-top: 8px;
+}
+
+.publish-website a {
+    display: inline-block;
+    color: var(--primary-blue);
+    text-decoration: underline;
+}

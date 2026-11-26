@@ -4,6 +4,7 @@ using obsidian_graphrag_v2.Web.Components;
 using obsidian_graphrag_v2.Web.Services;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Components.Authorization;
+using Microsoft.AspNetCore.Components.Endpoints;
 using Microsoft.AspNetCore.Components.Server.Circuits;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.RateLimiting;
@@ -52,8 +53,10 @@ builder.Services.AddSingleton(accounts);
 builder.Services.AddDataProtection().PersistKeysToFileSystem(new DirectoryInfo(accounts.KeysPath));
 builder.Services.AddSingleton<CrawlAccess>();
 builder.Services.AddSingleton<PortalWorkspaces>();
+builder.Services.AddSingleton<PortalWebsitePublisher>();
 builder.Services.AddCascadingAuthenticationState();
 builder.Services.AddScoped<AuthenticationStateProvider, PortalAuthenticationState>();
+builder.Services.AddScoped<PortalWorkspaceSelection>();
 builder.Services.AddScoped<CircuitHandler, PortalCircuitAccess>();
 builder.Services.AddAuthentication("Portal").AddCookie("Portal", options =>
 {
@@ -79,6 +82,11 @@ builder.Services.AddAuthentication("Portal").AddCookie("Portal", options =>
             context.Response.Redirect(context.RedirectUri);
         return Task.CompletedTask;
     };
+    options.Events.OnRedirectToAccessDenied = context =>
+    {
+        context.Response.StatusCode = StatusCodes.Status403Forbidden;
+        return Task.CompletedTask;
+    };
 });
 builder.Services.AddAuthorizationBuilder().SetFallbackPolicy(
     new Microsoft.AspNetCore.Authorization.AuthorizationPolicyBuilder().RequireAuthenticatedUser().Build());
@@ -92,7 +100,8 @@ builder.Services.AddRateLimiter(options =>
 builder.Services.AddScoped(sp =>
 {
     var state = sp.GetRequiredService<AuthenticationStateProvider>().GetAuthenticationStateAsync().GetAwaiter().GetResult();
-    var id = accounts.GetWorkspaceId(state.User) ?? throw new UnauthorizedAccessException();
+    var selection = sp.GetRequiredService<PortalWorkspaceSelection>();
+    var id = accounts.GetWorkspaceId(state.User, selection.DepartmentId) ?? throw new UnauthorizedAccessException();
     return sp.GetRequiredService<PortalWorkspaces>().For(id);
 });
 builder.Services.AddScoped(sp => new VaultGraphEngine(sp.GetRequiredService<PortalWorkspaces.Workspace>().Path));
@@ -109,6 +118,10 @@ builder.Services.AddHttpClient("PortalDocling", client =>
 });
 builder.Services.AddScoped(sp => new DocumentImportService(
     sp.GetRequiredService<IHttpClientFactory>().CreateClient("PortalDocling"), sp.GetRequiredService<VaultGraphEngine>()));
+builder.Services.AddScoped(sp => new SourceArchiveService(
+    sp.GetRequiredService<ObsidianIngestEngine>(), sp.GetRequiredService<DocumentImportService>(),
+    sp.GetRequiredService<SiteManagerService>(), sp.GetRequiredService<N8nCrawlService>(),
+    async () => (await sp.GetRequiredService<AuthenticationStateProvider>().GetAuthenticationStateAsync()).User.IsInRole("Owner")));
 
 var app = builder.Build();
 
@@ -129,6 +142,19 @@ app.Use(async (context, next) =>
     await next(context);
 });
 app.UseAuthorization();
+app.Use(async (context, next) =>
+{
+    var departmentId = context.Request.Query["department"].FirstOrDefault();
+    if (!string.IsNullOrEmpty(departmentId) && context.GetEndpoint()?.Metadata
+            .GetMetadata<ComponentTypeMetadata>() is not null &&
+        accounts.GetWorkspaceId(context.User, departmentId) is null)
+    {
+        context.Response.StatusCode = StatusCodes.Status403Forbidden;
+        await context.Response.WriteAsync("You do not have access to this department workspace.");
+        return;
+    }
+    await next(context);
+});
 app.UseRateLimiter();
 app.UseAntiforgery();
 
@@ -149,8 +175,8 @@ app.MapRazorComponents<App>()
 app.MapGet("/api/graph/{site?}", (string? site, HttpContext context) =>
 {
     context.Response.Headers.CacheControl = "no-store";
-    var id = accounts.GetWorkspaceId(context.User);
-    return id is null ? Results.Unauthorized() :
+    var id = accounts.GetWorkspaceId(context.User, context.Request.Query["department"].FirstOrDefault());
+    return id is null ? Results.Forbid() :
         Results.Ok(new VaultGraphEngine(accounts.WorkspacePath(id)).ExportGraphData(site ?? ""));
 }).RequireAuthorization();
 
