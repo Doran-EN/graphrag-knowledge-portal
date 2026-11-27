@@ -14,6 +14,43 @@ namespace ObsidianGraphRag.Shared.Services.Ingestion
 {
     public class ObsidianIngestEngine
     {
+        private static readonly JsonSerializerOptions ExtractionJsonOptions = new()
+        {
+            PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower
+        };
+
+        private static readonly JsonElement ExtractionSchema = JsonSerializer.Deserialize<JsonElement>("""
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["summary", "key_points", "candidates"],
+              "properties": {
+                "summary": { "type": "string" },
+                "key_points": { "type": "array", "items": { "type": "string" } },
+                "candidates": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["name", "kind", "relation_type"],
+                    "properties": {
+                      "name": { "type": "string" },
+                      "kind": { "type": "string", "enum": ["entity", "concept"] },
+                      "entity_type": { "type": "string" },
+                      "aliases": { "type": "array", "items": { "type": "string" } },
+                      "summary": { "type": "string" },
+                      "details": { "type": "string" },
+                      "relation_type": { "type": "string", "enum": ["SAME_AS", "SUBCONCEPT_OF", "DOCUMENT", "RELATED_TO", "DISTINCT"] },
+                      "target_canonical_name": { "type": "string" },
+                      "parent_concepts": { "type": "array", "items": { "type": "string" } },
+                      "published_by": { "type": "string" }
+                    }
+                  }
+                }
+              }
+            }
+            """);
+
         private readonly VaultGraphEngine _graphEngine;
         private readonly ILlmClient _llmClient;
         private readonly object _jobLock = new();
@@ -205,18 +242,29 @@ namespace ObsidianGraphRag.Shared.Services.Ingestion
 
                     // 7. Execute Knowledge Extraction Pipeline
                     AddLog("INFO", $"⚙️ Processing: {relativeRawSubPath} ...");
-                    var auditEntry = await ProcessKnowledgeDocumentAsync(
-                        vaultPath,
-                        siteName,
-                        relativeRawSubPath,
-                        subPathNoExt,
-                        mirroredSourceFilePath,
-                        rawNote,
-                        rawContent,
-                        changeResult.ContentHash,
-                        schemaResult.SchemaContent,
-                        catalog
-                    );
+                    AuditLogEntry auditEntry;
+                    try
+                    {
+                        auditEntry = await ProcessKnowledgeDocumentAsync(
+                            vaultPath, siteName, relativeRawSubPath, subPathNoExt, mirroredSourceFilePath,
+                            rawNote, rawContent, changeResult.ContentHash, schemaResult.SchemaContent, catalog);
+                    }
+                    catch (KnowledgeExtractionException error)
+                    {
+                        CurrentJob.SectionsToRetry.Enqueue(relativeRawSubPath);
+                        AddLog("WARN", $"{relativeRawSubPath} still needs extraction. {error.Message} Continuing with the next section.");
+                        await AuditLogger.AppendEntryAsync(vaultPath, siteName, new AuditLogEntry
+                        {
+                            SourcePath = $"raw/{siteName}/{relativeRawSubPath}",
+                            Action = "FAILED",
+                            ContentHash = changeResult.ContentHash,
+                            Warnings = { error.Message }
+                        });
+                        CurrentJob.ProcessedFiles++;
+                        CurrentJob.ActiveSection = null;
+                        NotifyProgress();
+                        continue;
+                    }
 
                     await AuditLogger.AppendEntryAsync(vaultPath, siteName, auditEntry);
                     File.Delete(retryMarker);
@@ -230,8 +278,10 @@ namespace ObsidianGraphRag.Shared.Services.Ingestion
                 await UpdateWikiIndexAsync(vaultPath, siteName);
 
                 _graphEngine.Reload();
-                CurrentJob.CurrentStepDescription = "Completed";
-                AddLog("SUCCESS", $"🎉 Ingestion complete! {CurrentJob.UpdatedFiles} compiled, {CurrentJob.UnchangedFiles} skipped. Graph reloaded.");
+                var remaining = CurrentJob.SectionsToRetry.Count;
+                CurrentJob.CurrentStepDescription = remaining == 0 ? "Completed" : "Completed with sections to retry";
+                var retryNote = remaining == 0 ? "" : $" {remaining} {(remaining == 1 ? "section needs" : "sections need")} retrying.";
+                AddLog(remaining == 0 ? "SUCCESS" : "WARN", $"Ingestion complete. {CurrentJob.UpdatedFiles} compiled, {CurrentJob.UnchangedFiles} unchanged.{retryNote} Graph reloaded.");
             }
             catch (Exception ex)
             {
@@ -255,6 +305,44 @@ namespace ObsidianGraphRag.Shared.Services.Ingestion
         internal static string GetWikiSourceSubpath(string relativeRawPath) =>
             relativeRawPath.Equals("index.md", StringComparison.OrdinalIgnoreCase)
                 ? "home.md" : relativeRawPath.Replace('\\', '/');
+
+        private async Task<ExtractionResult> ExtractKnowledgeAsync(string systemPrompt, Func<string> retryPrompt,
+            string userPrompt, string section)
+        {
+            for (var attempt = 0; ; attempt++)
+            {
+                var prompt = attempt == 0 ? systemPrompt : retryPrompt();
+                var json = await _llmClient.ExtractStructuredJsonAsync(prompt, userPrompt, ExtractionSchema);
+                try
+                {
+                    if (json.StartsWith("[LLM Output Truncated]", StringComparison.Ordinal))
+                        throw new JsonException("The model reached its generation limit before completing the extraction.");
+                    if (json.StartsWith("[LLM ", StringComparison.Ordinal))
+                        throw new InvalidOperationException(json);
+
+                    var result = JsonSerializer.Deserialize<ExtractionResult>(json, ExtractionJsonOptions);
+                    if (result?.Candidates is null || result.Candidates.Any(candidate => candidate?.Name is null))
+                        throw new JsonException("The model did not return a valid list of knowledge candidates.");
+                    return result;
+                }
+                catch (JsonException error) when (attempt == 0)
+                {
+                    AddLog("WARN", $"The model returned incomplete or invalid JSON for {section}. Retrying extraction. {error.Message}");
+                }
+                catch (JsonException error)
+                {
+                    throw new KnowledgeExtractionException($"The model returned incomplete or invalid JSON after retrying. {error.Message}", error);
+                }
+            }
+        }
+
+        private sealed record ExtractionResult(string? Summary, string?[]? KeyPoints, ExtractedCandidate[]? Candidates);
+
+        private sealed record ExtractedCandidate(string? Name, string? Kind, string? EntityType, string?[]? Aliases,
+            string? Summary, string? Details, string? RelationType, string? TargetCanonicalName,
+            string?[]? ParentConcepts, string? PublishedBy);
+
+        private sealed class KnowledgeExtractionException(string message, Exception inner) : Exception(message, inner);
 
         private async Task<AuditLogEntry> ProcessKnowledgeDocumentAsync(
             string vaultPath,
@@ -298,14 +386,12 @@ namespace ObsidianGraphRag.Shared.Services.Ingestion
             var trimmed = sanitizedContent.Length > 3000 ? sanitizedContent[..3000] : sanitizedContent;
             var archive = SourceArchive.Read(vaultPath);
             var richCatalogContext = catalog.GetRichCatalogContext(100, entry => !entry.Sources.Any(archive.ContainsPath));
-            var richCatalogJson = JsonSerializer.Serialize(richCatalogContext);
-
-            var systemPrompt = $@"You are a production-grade knowledge engineering compiler adhering strictly to TheSchema.md conventions.
+            string BuildPrompt(string catalogJson) => $@"You are a production-grade knowledge engineering compiler adhering strictly to TheSchema.md conventions.
 Ontology & Linking Rules:
 {schemaPromptContext}
 
 Existing Knowledge Catalog (Active Entities & Concepts in Vault):
-{richCatalogJson}
+{catalogJson}
 
 CRITICAL 4-WAY DECISION RULES:
 1. SAME_AS (STRICT SYNONYM ONLY):
@@ -337,53 +423,33 @@ NOISE FILTERING:
 - NEVER extract UI components, shopping cart, promo banners, rating stars (★★★★★), or generic navigation labels.
 - NEVER extract media placeholders (e.g. [Image: ...], [Video: ...]) as Entity or Concept nodes. Media resources are handled separately as Source metadata.
 
-Return strictly valid JSON conforming to:
-{{
-      ""summary"": ""One-sentence core summary of this document"",
-      ""key_points"": [""Key takeaway 1"", ""Key takeaway 2""],
-      ""candidates"": [
-    {{
-      ""name"": ""Clean Canonical Name"",
-      ""kind"": ""entity"" or ""concept"",
-      ""entity_type"": ""Organization"" / ""Person"" / ""Product"" / ""Service"" / ""Document"" / ""General"",
-      ""aliases"": [""alias1"", ""alias2""],
-      ""summary"": ""One-sentence explanation"",
-      ""details"": ""Rules, mechanism, workflow, or description"",
-      ""relation_type"": ""SAME_AS"" / ""SUBCONCEPT_OF"" / ""DOCUMENT"" / ""RELATED_TO"" / ""DISTINCT"",
-      ""target_canonical_name"": ""Title of target node if SAME_AS, SUBCONCEPT_OF, or DOCUMENT"",
-      ""parent_concepts"": [""Parent concept name if subconcept""],
-      ""published_by"": ""Publishing organization if Document entity""
-    }}
-  ]
-}}";
+Return one complete JSON object containing summary, key_points, and candidates.
+Keep the summary to one sentence. Use short takeaways and distinct candidates supported by the source.
+Candidates use a canonical name and the kind and relation_type from the rules above.
+Use entity_type for the category and include aliases, details, target_canonical_name, parent_concepts,
+or published_by when relevant.";
 
             var userPrompt = $"Title: {rawNote.Title}\nContent:\n{trimmed}";
+            var extraction = await ExtractKnowledgeAsync(
+                BuildPrompt(JsonSerializer.Serialize(richCatalogContext)),
+                () => BuildPrompt(JsonSerializer.Serialize(richCatalogContext.Take(20))) +
+                    "\nKeep every field brief. Omit duplicate candidates and finish the entire JSON object.",
+                userPrompt, relativeRawSubPath);
 
-            var jsonResult = await _llmClient.ExtractJsonAsync(systemPrompt, userPrompt);
-            if (jsonResult.StartsWith("[LLM ", StringComparison.Ordinal))
-                throw new InvalidOperationException(jsonResult);
-            using var doc = JsonDocument.Parse(jsonResult);
-            var root = doc.RootElement;
-            if (root.ValueKind != JsonValueKind.Object ||
-                !root.TryGetProperty("candidates", out var candArr) ||
-                candArr.ValueKind != JsonValueKind.Array)
-                throw new JsonException("The model did not return a valid list of knowledge candidates.");
+            if (!string.IsNullOrWhiteSpace(extraction.Summary))
+                summary = extraction.Summary;
 
-            if (root.TryGetProperty("summary", out var sumEl))
+            if (extraction.KeyPoints is { } points)
             {
-                var s = sumEl.GetString();
-                if (!string.IsNullOrWhiteSpace(s)) summary = s;
-            }
-            if (root.TryGetProperty("key_points", out var kpEl) && kpEl.ValueKind == JsonValueKind.Array)
-            {
-                var pts = kpEl.EnumerateArray().Select(x => $"- {x.GetString()}").Where(x => !string.IsNullOrWhiteSpace(x)).ToList();
-                if (pts.Count > 0) keyPointsStr = string.Join("\n", pts);
+                var bullets = points.Where(point => !string.IsNullOrWhiteSpace(point)).Select(point => $"- {point}").ToList();
+                if (bullets.Count > 0)
+                    keyPointsStr = string.Join("\n", bullets);
             }
 
             var candidates = new List<KnowledgeNodeCandidate>();
-            foreach (var cEl in candArr.EnumerateArray())
+            foreach (var extracted in extraction.Candidates!)
             {
-                var cName = cEl.GetProperty("name").GetString() ?? "";
+                var cName = extracted.Name!;
                 var valRes = EntityValidator.Validate(cName);
                 if (!valRes.IsValid)
                 {
@@ -394,23 +460,16 @@ Return strictly valid JSON conforming to:
                 var candidate = new KnowledgeNodeCandidate
                 {
                     Name = valRes.CleanedName,
-                    Kind = cEl.TryGetProperty("kind", out var kEl) ? kEl.GetString() ?? "entity" : "entity",
-                    EntityType = cEl.TryGetProperty("entity_type", out var etEl) ? etEl.GetString() ?? "General" : "General",
-                    Summary = cEl.TryGetProperty("summary", out var sEl) ? sEl.GetString() ?? "" : "",
-                    Details = cEl.TryGetProperty("details", out var dEl) ? dEl.GetString() ?? "" : "",
-                    RelationType = cEl.TryGetProperty("relation_type", out var rtEl) ? rtEl.GetString() ?? KnowledgeRelationTypes.Distinct : KnowledgeRelationTypes.Distinct,
-                    TargetCanonicalName = cEl.TryGetProperty("target_canonical_name", out var tcnEl) ? tcnEl.GetString() : null,
-                    PublishedBy = cEl.TryGetProperty("published_by", out var pbEl) ? pbEl.GetString() : null
+                    Kind = extracted.Kind ?? "entity",
+                    EntityType = extracted.EntityType ?? "General",
+                    Summary = extracted.Summary ?? "",
+                    Details = extracted.Details ?? "",
+                    RelationType = extracted.RelationType ?? KnowledgeRelationTypes.Distinct,
+                    TargetCanonicalName = extracted.TargetCanonicalName,
+                    PublishedBy = extracted.PublishedBy,
+                    Aliases = (extracted.Aliases ?? []).OfType<string>().Where(value => !string.IsNullOrEmpty(value)).ToList(),
+                    ParentConcepts = (extracted.ParentConcepts ?? []).OfType<string>().Where(value => !string.IsNullOrEmpty(value)).ToList()
                 };
-
-                if (cEl.TryGetProperty("aliases", out var alEl) && alEl.ValueKind == JsonValueKind.Array)
-                {
-                    candidate.Aliases = alEl.EnumerateArray().Select(a => a.GetString() ?? "").Where(s => !string.IsNullOrEmpty(s)).ToList();
-                }
-                if (cEl.TryGetProperty("parent_concepts", out var pcEl) && pcEl.ValueKind == JsonValueKind.Array)
-                {
-                    candidate.ParentConcepts = pcEl.EnumerateArray().Select(p => p.GetString() ?? "").Where(s => !string.IsNullOrEmpty(s)).ToList();
-                }
 
                 candidates.Add(candidate);
             }

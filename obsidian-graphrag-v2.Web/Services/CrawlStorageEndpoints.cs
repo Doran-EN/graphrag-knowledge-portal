@@ -48,6 +48,8 @@ internal static class CrawlStorageEndpoints
                 return CallbackResult(crawl.RecordQueue(workspace.Token, total));
             if (progress.Page is { } page)
                 return CallbackResult(crawl.RecordPageChecked(workspace.Token, page, progress.Failed));
+            if (progress.Discovering)
+                return CallbackResult(crawl.RecordDiscovery(workspace.Token));
             return Results.BadRequest();
         }
 
@@ -111,5 +113,5 @@ internal static class CrawlStorageEndpoints
 
     private static IResult CallbackResult(bool accepted) => accepted ? Results.Json(new { ok = true }) : Results.NotFound();
 
-    private sealed record CrawlProgressUpdate(int? Total, int? Page, bool Failed);
+    private sealed record CrawlProgressUpdate(int? Total, int? Page, bool Failed, bool Discovering);
 }

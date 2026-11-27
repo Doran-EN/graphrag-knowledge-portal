@@ -88,7 +88,7 @@ public partial class IngestPage : IDisposable
         if (CrawlControlsBusy || !HasValidUrl)
             return;
 
-        await N8nService.TriggerCrawlAsync(targetWebsiteInput, N8nCrawlService.CrawlScope.Section);
+        await N8nService.TriggerCrawlAsync(targetWebsiteInput, N8nCrawlService.CrawlScope.Website);
     }
 
     private void CancelCrawl(DateTimeOffset startedAt)
@@ -152,8 +152,8 @@ public partial class IngestPage : IDisposable
     {
         N8nCrawlService.CrawlStage.Starting => "Waiting for the crawler to accept the website.",
         N8nCrawlService.CrawlStage.WaitingForWorkflow => "n8n accepted the request. Waiting for the workflow to connect to this workspace.",
-        N8nCrawlService.CrawlStage.CollectingPages => "Checking crawl rules and discovering pages in the selected scope.",
-        N8nCrawlService.CrawlStage.FetchingPages => "Fetching the selected pages.",
+        N8nCrawlService.CrawlStage.CollectingPages => "Checking crawl rules and looking for pages in the website's sitemaps.",
+        N8nCrawlService.CrawlStage.FetchingPages => "Fetching discovered pages.",
         N8nCrawlService.CrawlStage.SavingPages => "Saving pages as they arrive from the crawler.",
         _ when progress.StalePagesTotal is > 0 => $"Removing stale pages. {progress.StalePagesRemoved} of {progress.StalePagesTotal} removed.",
         _ => "Waiting for the final report and any cleanup."

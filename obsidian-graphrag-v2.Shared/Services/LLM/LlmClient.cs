@@ -44,7 +44,11 @@ namespace ObsidianGraphRag.Shared.Services.LLM
             _apiKey = apiKey;
         }
 
-        public async Task<string> ChatAsync(List<ChatMessageDto> messages, double temperature = 0.2, int? maxOutputTokens = null)
+        public Task<string> ChatAsync(List<ChatMessageDto> messages, double temperature = 0.2, int? maxOutputTokens = null) =>
+            SendChatAsync(messages, temperature, maxOutputTokens);
+
+        private async Task<string> SendChatAsync(List<ChatMessageDto> messages, double temperature,
+            int? maxOutputTokens, JsonElement? schema = null)
         {
             try
             {
@@ -54,6 +58,7 @@ namespace ObsidianGraphRag.Shared.Services.LLM
                     messages = messages,
                     stream = false,
                     think = _model.Equals("qwen3.5:4b", StringComparison.OrdinalIgnoreCase) ? (bool?)false : null,
+                    format = schema,
                     options = new { temperature, num_predict = maxOutputTokens }
                 };
 
@@ -63,6 +68,9 @@ namespace ObsidianGraphRag.Shared.Services.LLM
                 {
                     var jsonStr = await response.Content.ReadAsStringAsync();
                     using var doc = JsonDocument.Parse(jsonStr);
+                    if (schema.HasValue && doc.RootElement.TryGetProperty("done_reason", out var doneReason) &&
+                        doneReason.ValueKind == JsonValueKind.String && doneReason.GetString() == "length")
+                        return "[LLM Output Truncated] The model reached its generation limit before completing the extraction.";
                     if (doc.RootElement.TryGetProperty("message", out var msgEl) &&
                         msgEl.TryGetProperty("content", out var contentEl))
                     {
@@ -87,7 +95,10 @@ namespace ObsidianGraphRag.Shared.Services.LLM
                 }
 
                 // Try the OpenAI-compatible route when the native route is unavailable.
-                var openaiPayload = new { model = _model, messages, temperature, max_tokens = maxOutputTokens };
+                var responseFormat = schema.HasValue
+                    ? new { type = "json_schema", json_schema = new { name = "knowledge_extraction", schema } }
+                    : null;
+                var openaiPayload = new { model = _model, messages, temperature, max_tokens = maxOutputTokens, response_format = responseFormat };
                 using var openaiRequest = CreateRequest("/v1/chat/completions", openaiPayload);
                 using var openaiResponse = await _httpClient.SendAsync(openaiRequest);
                 if (!openaiResponse.IsSuccessStatusCode)
@@ -100,6 +111,9 @@ namespace ObsidianGraphRag.Shared.Services.LLM
                 var choices = openaiDoc.RootElement.GetProperty("choices");
                 if (choices.GetArrayLength() > 0)
                 {
+                    if (schema.HasValue && choices[0].TryGetProperty("finish_reason", out var finishReason) &&
+                        finishReason.ValueKind == JsonValueKind.String && finishReason.GetString() == "length")
+                        return "[LLM Output Truncated] The model reached its generation limit before completing the extraction.";
                     return choices[0].GetProperty("message").GetProperty("content").GetString() ?? string.Empty;
                 }
             }
@@ -144,6 +158,14 @@ namespace ObsidianGraphRag.Shared.Services.LLM
             var raw = await ChatAsync(messages, temperature: 0.1);
             return raw.StartsWith("[LLM ", StringComparison.Ordinal) ? raw : CleanJson(raw);
         }
+
+        public Task<string> ExtractStructuredJsonAsync(string systemPrompt, string userPrompt, JsonElement schema) =>
+            SendChatAsync(
+                [
+                    new() { Role = "system", Content = systemPrompt },
+                    new() { Role = "user", Content = userPrompt }
+                ],
+                temperature: 0, maxOutputTokens: null, schema: schema);
 
         public async Task<float[][]> GenerateEmbeddingsAsync(IReadOnlyList<string> inputs, CancellationToken cancellationToken)
         {

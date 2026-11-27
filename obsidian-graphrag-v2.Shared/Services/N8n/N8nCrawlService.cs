@@ -6,9 +6,7 @@ namespace ObsidianGraphRag.Shared.Services.N8n;
 
 public sealed class N8nCrawlService
 {
-    public const int ProtocolVersion = 2;
-    public const int SectionPageLimit = 25;
-    public static readonly TimeSpan GrantLifetime = TimeSpan.FromMinutes(5) + TimeSpan.FromSeconds(15);
+    public const int ProtocolVersion = 3;
     private static readonly TimeSpan NoUpdateLimit = TimeSpan.FromSeconds(60);
 
     private readonly HttpClient _httpClient;
@@ -48,7 +46,7 @@ public sealed class N8nCrawlService
     {
         var url = targetWebsite.Trim();
         using var submission = new CancellationTokenSource();
-        var run = new CrawlRun(scope == CrawlScope.Section ? SectionPageLimit : 1, submission);
+        var run = new CrawlRun(submission);
         lock (_gate)
         {
             if (_activeRun is not null)
@@ -69,7 +67,7 @@ public sealed class N8nCrawlService
             submission.CancelAfter(TimeSpan.FromSeconds(15));
             using var response = await _httpClient.PostAsJsonAsync(
                 $"{_baseUrl}{_webhookPath}", new { targetWebsite = url, crawlToken = token,
-                    scope = scope == CrawlScope.Section ? "section" : "single" }, submission.Token);
+                    scope = scope == CrawlScope.Website ? "website" : "single" }, submission.Token);
 
             if (!response.IsSuccessStatusCode)
                 result = Failed($"The crawler returned HTTP {(int)response.StatusCode}. Check that the portal workflow is published in n8n.");
@@ -95,7 +93,7 @@ public sealed class N8nCrawlService
                     CrawlStage.CollectingPages => "Website discovery timed out.",
                     CrawlStage.Finalizing => "The workflow did not finish reporting the crawl.",
                     _ when run.SavedPages.Count == 0 => "The crawler timed out before it could save the first page.",
-                    _ => "The crawler reached its time limit or stopped reporting progress."
+                    _ => "The crawler stopped reporting progress."
                 });
                 run.Completion.TrySetResult(result);
             }
@@ -141,10 +139,7 @@ public sealed class N8nCrawlService
             TimeSpan remaining;
             lock (_gate)
             {
-                var now = DateTimeOffset.UtcNow;
-                var totalRemaining = run.StartedAt + GrantLifetime - now;
-                var idleRemaining = run.LastUpdateAt + NoUpdateLimit - now;
-                remaining = totalRemaining < idleRemaining ? totalRemaining : idleRemaining;
+                remaining = run.LastUpdateAt + NoUpdateLimit - DateTimeOffset.UtcNow;
             }
             if (remaining <= TimeSpan.Zero)
                 throw new TimeoutException();
@@ -172,7 +167,7 @@ public sealed class N8nCrawlService
                 return false;
             if (version != ProtocolVersion)
             {
-                run.Completion.TrySetResult(Failed("Publish the updated bounded crawl workflow in n8n before retrying."));
+                run.Completion.TrySetResult(Failed("Publish the updated website crawl workflow in n8n before retrying."));
                 return false;
             }
 
@@ -192,9 +187,11 @@ public sealed class N8nCrawlService
     public bool RecordQueue(string token, int total) =>
         RecordActivity(token, CrawlStage.FetchingPages, run =>
         {
-            if (total >= 0 && total <= run.PageLimit)
-                run.TotalPages ??= total;
+            if (total >= 0)
+                run.TotalPages = Math.Max(total, run.TotalPages ?? 0);
         });
+
+    public bool RecordDiscovery(string token) => RecordActivity(token, CrawlStage.CollectingPages);
 
     public bool RecordPageChecked(string token, int pageNumber, bool failed) =>
         RecordActivity(token, CrawlStage.FetchingPages, run =>
@@ -230,9 +227,10 @@ public sealed class N8nCrawlService
                 var staleFiles = report.RootElement.GetProperty("staleUrlsDeleted").EnumerateArray()
                     .Select(item => ReadStaleFileName(item, site)).ToHashSet(StringComparer.Ordinal);
                 var blocked = summary.TryGetProperty("blockedByRobotsCount", out var count) ? count.GetInt32() : 0;
+                var failedSitemaps = summary.TryGetProperty("failedSitemapCount", out var sitemaps) ? sitemaps.GetInt32() : 0;
                 var failure = report.RootElement.TryGetProperty("failureCode", out var code) ? code.GetString() : null;
                 run.Report = new CrawlReport(site, Path.GetDirectoryName(reportPath)!, summary.GetProperty("failedCount").GetInt32(),
-                    summary.GetProperty("unchangedSkippedCount").GetInt32(), blocked, staleFiles, failure);
+                    summary.GetProperty("unchangedSkippedCount").GetInt32(), blocked, failedSitemaps, staleFiles, failure);
             }
             catch (Exception error) when (error is IOException or JsonException or KeyNotFoundException or InvalidOperationException or FormatException)
             {
@@ -315,9 +313,10 @@ public sealed class N8nCrawlService
             var blocked = report.BlockedByRobots > 0 ? $" The site's robots.txt blocked {report.BlockedByRobots} of the candidate URLs." : "";
             status = Failed($"No pages were saved.{details}{blocked} Check the URL and retry the crawl.");
         }
-        else if (report.Failed > 0)
+        else if (report.Failed > 0 || report.FailedSitemaps > 0)
         {
-            status = new CrawlStatus($"Ready to ingest with page errors. {savedLabel}, {failedLabel}.",
+            var sitemapWarning = report.FailedSitemaps > 0 ? " Some sitemaps could not be read." : "";
+            status = new CrawlStatus($"Ready to ingest with crawl errors. {savedLabel}, {failedLabel}.{sitemapWarning}",
                 report.Site, NeedsAttention: true);
         }
         else
@@ -346,12 +345,11 @@ public sealed class N8nCrawlService
     public sealed record CrawlProgress(CrawlStage Stage, DateTimeOffset StartedAt, DateTimeOffset LastUpdateAt,
         int SavedPages, int StalePagesRemoved, int? StalePagesTotal, int? TotalPages, int CheckedPages, int FailedPages);
 
-    public enum CrawlScope { SinglePage, Section }
+    public enum CrawlScope { SinglePage, Website }
     public enum CrawlStage { Starting, WaitingForWorkflow, CollectingPages, FetchingPages, SavingPages, Finalizing }
 
-    private sealed class CrawlRun(int pageLimit, CancellationTokenSource submission)
+    private sealed class CrawlRun(CancellationTokenSource submission)
     {
-        public int PageLimit { get; } = pageLimit;
         public CancellationTokenSource Submission { get; } = submission;
         public DateTimeOffset StartedAt { get; } = DateTimeOffset.UtcNow;
         public DateTimeOffset LastUpdateAt { get; set; }
@@ -367,6 +365,6 @@ public sealed class N8nCrawlService
         public TaskCompletionSource<CrawlStatus> Completion { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
     }
 
-    private sealed record CrawlReport(string Site, string SitePath, int Failed, int Skipped, int BlockedByRobots,
+    private sealed record CrawlReport(string Site, string SitePath, int Failed, int Skipped, int BlockedByRobots, int FailedSitemaps,
         HashSet<string> StaleFiles, string? FailureCode);
 }

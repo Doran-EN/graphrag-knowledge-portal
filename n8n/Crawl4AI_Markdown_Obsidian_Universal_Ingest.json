@@ -14,7 +14,7 @@
   "nodes": [
     {
       "parameters": {
-        "jsCode": "const url = $json.url.split('#')[0];\nconst parts = url.match(/^(https?:\\/\\/)([^\\/?#]+)(\\/[^?#]*)?(\\?[^#]*)?$/i);\nif (!parts || !$json.site) throw new Error('Invalid portal crawl');\nconst origin = parts[1].toLowerCase() + parts[2].toLowerCase().replace(/:(80|443)$/, '');\nconst section = $(\"Webhook (Crawl Trigger)\").first().json.body.scope === 'section';\nreturn [{ json: {\n  targetUrl: url,\n  origin,\n  targetHostname: parts[2].toLowerCase().replace(/:(80|443)$/, ''),\n  scopePath: (parts[3] || '/').replace(/\\/+$/, '') || '/',\n  section,\n  limit: section ? 25 : 1,\n  siteName: $json.site,\n  excludePaths: [],\n  recheckIntervalHours: 168,\n  robotsUrl: origin + '/robots.txt',\n  sitemapUrl: origin + '/sitemap.xml'\n} }];"
+        "jsCode": "const url = $json.url.split('#')[0];\nconst parts = url.match(/^(https?:\\/\\/)([^\\/?#]+)(\\/[^?#]*)?(\\?[^#]*)?$/i);\nif (!parts || !$json.site) throw new Error('Invalid portal crawl');\nconst scheme = parts[1].toLowerCase();\nconst origin = scheme + parts[2].toLowerCase().replace(scheme === 'https://' ? /:443$/ : /:80$/, '');\nconst scope = $(\"Webhook (Crawl Trigger)\").first().json.body.scope;\nconst wholeWebsite = scope === 'website' || scope === 'section';\nreturn [{ json: {\n  targetUrl: url,\n  origin,\n  wholeWebsite,\n  siteName: $json.site,\n  robotsUrl: origin + '/robots.txt',\n  sitemapUrl: origin + '/sitemap.xml'\n} }];"
       },
       "id": "workflow-config-node",
       "name": "⚙️ Workflow Config (修改网站入口)",
@@ -51,29 +51,7 @@
     },
     {
       "parameters": {
-        "url": "={{ $('⚙️ Workflow Config (修改网站入口)').first().json.targetUrl }}",
-        "options": {
-          "response": {
-            "response": {
-              "responseFormat": "text"
-            }
-          },
-          "timeout": 8000
-        }
-      },
-      "id": "fetch-homepage-probe-node",
-      "name": "Fetch Homepage (First-Level Discovery)",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.2,
-      "position": [
-        608,
-        -96
-      ],
-      "onError": "continueRegularOutput"
-    },
-    {
-      "parameters": {
-        "jsCode": "const response = $input.first().json;\nconst status = Number(response.statusCode);\nconst missing = status === 404 || status === 410;\nconst body = response.data ?? response.body;\nconst contentType = response.headers?.['content-type'] || '';\nconst available = missing || (status >= 200 && status < 300 && typeof body === 'string' && !/^text\\/html\\b/i.test(contentType));\nconst raw = available && !missing ? body : '';\nconst config = $(\"⚙️ Workflow Config (修改网站入口)\").first().json;\nconst sitemapUrls = [];\nconst lines = raw.split('\\n');\n\nconst groups = [];\nlet currentGroup = null;\n\nfor (let line of lines) {\n  line = line.replace(/#.*$/, '').trim();\n  if (!line) continue;\n\n  const colonIdx = line.indexOf(':');\n  if (colonIdx === -1) continue;\n\n  const directive = line.substring(0, colonIdx).trim().toLowerCase();\n  const value = line.substring(colonIdx + 1).trim();\n\n  if (directive === 'sitemap' &&\n      (value.startsWith(config.origin + '/') || value.startsWith(config.origin.replace(/^http:/, 'https:') + '/'))) {\n    sitemapUrls.push(value);\n  }\n  if (directive === 'user-agent') {\n    const agent = value.toLowerCase();\n    if (!currentGroup || currentGroup.hasRules) {\n      currentGroup = { agents: [], rules: [], hasRules: false };\n      groups.push(currentGroup);\n    }\n    currentGroup.agents.push(agent);\n  } else if (currentGroup && (directive === 'disallow' || directive === 'allow')) {\n    currentGroup.hasRules = true;\n    if (!value) continue;\n\n    const hasEndAnchor = value.endsWith('$');\n    const cleanVal = hasEndAnchor ? value.slice(0, -1) : value;\n\n    let regexStr = cleanVal\n      .replace(/[.+?^${}()|[\\]\\\\]/g, '\\\\$&')\n      .replace(/\\*/g, '.*');\n\n    regexStr = '^' + regexStr + (hasEndAnchor ? '$' : '.*');\n\n    currentGroup.rules.push({\n      type: directive,\n      path: value,\n      pattern: regexStr,\n      length: value.length\n    });\n  }\n}\n\n// 匹配优先级：优先专属 agent (crawl4ai)，若无则降级匹配通配符 *\n\nconst specific = groups.filter(group => group.agents.includes('crawl4ai'));\nconst rules = (specific.length ? specific : groups.filter(group => group.agents.includes('*')))\n  .flatMap(group => group.rules);\nconst seedPath = config.targetUrl.match(/^https?:\\/\\/[^/?#]+(.*)$/i)?.[1] || '/';\nconst seedRules = rules.filter(rule => new RegExp(rule.pattern).test(seedPath.startsWith('?') ? '/' + seedPath : seedPath))\n  .sort((a, b) => b.length - a.length || Number(b.type === 'allow') - Number(a.type === 'allow'));\nreturn [{ json: {\n  available, rules,\n  seedAllowed: seedRules[0]?.type !== 'disallow',\n  sitemapUrl: sitemapUrls[0] || config.sitemapUrl\n} }];"
+        "jsCode": "const response = $input.first().json;\nconst status = Number(response.statusCode);\nconst missing = status === 404 || status === 410;\nconst body = response.data ?? response.body;\nconst contentType = response.headers?.['content-type'] || '';\nconst available = missing || (status >= 200 && status < 300 && typeof body === 'string' && !/^text\\/html\\b/i.test(contentType));\nconst raw = available && !missing ? body : '';\nconst config = $(\"⚙️ Workflow Config (修改网站入口)\").first().json;\nconst sitemapUrls = [];\nconst lines = raw.split('\\n');\n\nconst groups = [];\nlet currentGroup = null;\n\nfor (let line of lines) {\n  line = line.replace(/#.*$/, '').trim();\n  if (!line) continue;\n\n  const colonIdx = line.indexOf(':');\n  if (colonIdx === -1) continue;\n\n  const directive = line.substring(0, colonIdx).trim().toLowerCase();\n  const value = line.substring(colonIdx + 1).trim();\n\n  if (directive === 'sitemap' &&\n      (value.startsWith(config.origin + '/') || value.startsWith(config.origin.replace(/^http:/, 'https:') + '/'))) {\n    sitemapUrls.push(value);\n  }\n  if (directive === 'user-agent') {\n    const agent = value.toLowerCase();\n    if (!currentGroup || currentGroup.hasRules) {\n      currentGroup = { agents: [], rules: [], hasRules: false };\n      groups.push(currentGroup);\n    }\n    currentGroup.agents.push(agent);\n  } else if (currentGroup && (directive === 'disallow' || directive === 'allow')) {\n    currentGroup.hasRules = true;\n    if (!value) continue;\n\n    const hasEndAnchor = value.endsWith('$');\n    const cleanVal = hasEndAnchor ? value.slice(0, -1) : value;\n\n    let regexStr = cleanVal\n      .replace(/[.+?^${}()|[\\]\\\\]/g, '\\\\$&')\n      .replace(/\\*/g, '.*');\n\n    regexStr = '^' + regexStr + (hasEndAnchor ? '$' : '.*');\n\n    currentGroup.rules.push({\n      type: directive,\n      path: value,\n      pattern: regexStr,\n      length: value.length\n    });\n  }\n}\n\n// 匹配优先级：优先专属 agent (crawl4ai)，若无则降级匹配通配符 *\n\nconst specific = groups.filter(group => group.agents.includes('crawl4ai'));\nconst rules = (specific.length ? specific : groups.filter(group => group.agents.includes('*')))\n  .flatMap(group => group.rules);\nconst seedPath = config.targetUrl.match(/^https?:\\/\\/[^/?#]+(.*)$/i)?.[1] || '/';\nconst seedRules = rules.filter(rule => new RegExp(rule.pattern).test(seedPath.startsWith('?') ? '/' + seedPath : seedPath))\n  .sort((a, b) => b.length - a.length || Number(b.type === 'allow') - Number(a.type === 'allow'));\nreturn [{ json: {\n  available, rules,\n  seedAllowed: seedRules[0]?.type !== 'disallow',\n  sitemapUrls: sitemapUrls.length ? [...new Set(sitemapUrls)] : [config.sitemapUrl],\n  hasDeclaredSitemaps: sitemapUrls.length > 0\n} }];"
       },
       "id": "parse-robots-node",
       "name": "Parse robots.txt Rules",
@@ -112,7 +90,7 @@
     },
     {
       "parameters": {
-        "url": "={{ $(\"Parse robots.txt Rules\").first().json.sitemapUrl }}",
+        "url": "={{ $json.sitemapUrl }}",
         "options": {
           "timeout": 8000,
           "redirect": {
@@ -122,7 +100,9 @@
           },
           "response": {
             "response": {
-              "responseFormat": "text"
+              "responseFormat": "text",
+              "fullResponse": true,
+              "neverError": true
             }
           }
         }
@@ -154,62 +134,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const config = $(\"⚙️ Workflow Config (修改网站入口)\").first().json;\nconst entries = $input.first().json.sitemapindex?.sitemap || [];\nconst urls = [...new Set([entries].flat().map(entry => entry?.loc)\n  .filter(url => typeof url === 'string' &&\n    (url.startsWith(config.origin + '/') || url.startsWith(config.origin.replace(/^http:/, 'https:') + '/'))))];\nconst hint = config.scopePath.split('/')[1]?.toLowerCase();\nif (hint) urls.sort((a, b) => Number(b.toLowerCase().includes(hint)) - Number(a.toLowerCase().includes(hint)));\nreturn urls.length ? urls.slice(0, 3).map(sitemapUrl => ({ json: { sitemapUrl } })) : [{ json: {} }];"
-      },
-      "id": "extract-subsitemaps-node",
-      "name": "Extract Sub-Sitemaps",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [
-        1040,
-        432
-      ]
-    },
-    {
-      "parameters": {
-        "url": "={{ $json.sitemapUrl }}",
-        "options": {
-          "timeout": 6000,
-          "redirect": {
-            "redirect": {
-              "followRedirects": false
-            }
-          },
-          "response": {
-            "response": {
-              "responseFormat": "text"
-            }
-          }
-        }
-      },
-      "id": "fetch-child-sitemap-node",
-      "name": "Fetch Child Sitemap",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.2,
-      "position": [
-        1264,
-        432
-      ],
-      "onError": "continueRegularOutput"
-    },
-    {
-      "parameters": {
-        "options": {}
-      },
-      "id": "xml-to-json-child-sitemap",
-      "name": "XML to JSON (Child)",
-      "alwaysOutputData": true,
-      "type": "n8n-nodes-base.xml",
-      "typeVersion": 1,
-      "position": [
-        1488,
-        432
-      ],
-      "onError": "continueRegularOutput"
-    },
-    {
-      "parameters": {
-        "jsCode": "function scopedUrl(value, config) {\n  let href = (value || '').trim().split('#')[0];\n  if (!href || /[\\s\\\\]/.test(href)) return null;\n  if (href.startsWith('//')) href = config.origin.split(':')[0] + ':' + href;\n  if (!/^[a-z][a-z0-9+.-]*:/i.test(href)) {\n    const seedPath = config.targetUrl.match(/^https?:\\/\\/[^/?#]+(\\/[^?#]*)?/i)?.[1] || '/';\n    const path = href.startsWith('/') ? href\n      : href.startsWith('?') ? seedPath + href\n      : seedPath.slice(0, seedPath.lastIndexOf('/') + 1) + href;\n    href = config.origin + path;\n  }\n  const parts = href.match(/^(https?:\\/\\/[^/?#]+)(\\/[^?#]*)?(\\?[^#]*)?$/i);\n  if (!parts) return null;\n  const origin = parts[1].toLowerCase().replace(/:(80|443)$/, '');\n  if (origin !== config.origin && origin !== config.origin.replace(/^http:/, 'https:')) return null;\n\n  const inputPath = parts[2] || '/';\n  const segments = [];\n  for (const segment of inputPath.split('/')) {\n    const dot = segment.replace(/%2e/gi, '.');\n    if (!dot || dot === '.') continue;\n    if (dot === '..') { segments.pop(); continue; }\n    if (/%2f|%5c/i.test(segment)) return null;\n    segments.push(segment);\n  }\n  const pathname = '/' + segments.join('/');\n  if (config.section\n        ? config.scopePath !== '/' && pathname !== config.scopePath && !pathname.startsWith(config.scopePath + '/')\n        : pathname !== config.scopePath || (parts[3] || '') !== (config.targetUrl.match(/\\?.*$/)?.[0] || ''))\n    return null;\n  return origin + pathname + (pathname !== '/' && inputPath.endsWith('/') ? '/' : '') + (parts[3] || '');\n}\n\nconst config = $(\"⚙️ Workflow Config (修改网站入口)\").first().json;\nconst candidates = new Map();\nconst key = url => url.replace(/\\/(?=\\?|$)/, '');\nconst seed = config.targetUrl;\ncandidates.set(key(seed), { url: seed, sourceOrigin: 'seed', lastmod: null });\nlet sitemapCount = 0;\nlet probeCount = 0;\nfunction add(url, sourceOrigin, lastmod = null) {\n  const scoped = scopedUrl(url, config);\n  if (!scoped) return false;\n  const id = key(scoped);\n  if (!candidates.has(id)) candidates.set(id, { url: scoped, sourceOrigin, lastmod });\n  else if (lastmod && !candidates.get(id).lastmod) candidates.get(id).lastmod = lastmod;\n  return true;\n}\n\nif (config.section) {\n  const html = $(\"Fetch Homepage (First-Level Discovery)\").isExecuted ? $(\"Fetch Homepage (First-Level Discovery)\").first()?.json?.data : '';\n  if (typeof html === 'string') {\n    const links = /href\\s*=\\s*[\"']([^\"'#\\s>]+)[\"']/gi;\n    for (const [, href] of html.matchAll(links))\n      if (add(href.replace(/&amp;/gi, '&'), 'homepage_probe')) probeCount++;\n  }\n\n  const sitemaps = [$(\"XML to JSON (Index)\"), $(\"XML to JSON (Child)\")];\n  for (const node of sitemaps) {\n    if (!node.isExecuted) continue;\n    for (const item of node.all()) {\n      const entries = item.json.urlset?.url || [];\n      for (const entry of [entries].flat())\n        if (add(entry?.loc, 'sitemap', typeof entry?.lastmod === 'string' ? entry.lastmod.trim() : null)) sitemapCount++;\n    }\n  }\n}\n\nconst discovery = { sitemapCount, probeCount, rawDiscoveredCount: 1 + sitemapCount + probeCount,\n  uniquePagesCount: candidates.size };\nreturn Array.from(candidates.values()).map(item => ({ json: { ...item, discovery } }));"
+        "jsCode": "function websiteUrl(value, config, base = config.targetUrl) {\n  if (typeof value !== 'string') return null;\n  let url = value.trim().split('#')[0].replace(/&amp;/gi, '&');\n  if (!url || /[\\s\\\\]/.test(url)) return null;\n  if (url.startsWith('//')) url = base.split(':')[0] + ':' + url;\n  if (!/^[a-z][a-z0-9+.-]*:/i.test(url)) {\n    const [, origin, path = '/'] = base.match(/^(https?:\\/\\/[^/?#]+)(\\/[^?#]*)?/i) || [];\n    if (!origin) return null;\n    url = origin + (url.startsWith('/') ? url : url.startsWith('?') ? path + url :\n      path.slice(0, path.lastIndexOf('/') + 1) + url);\n  }\n  const parts = url.match(/^(https?:\\/\\/[^/?#]+)(\\/[^?#]*)?(\\?[^#]*)?$/i);\n  if (!parts) return null;\n  const origin = parts[1].toLowerCase();\n  const normalizedOrigin = origin.replace(origin.startsWith('https:') ? /:443$/ : /:80$/, '');\n  if (normalizedOrigin !== config.origin && normalizedOrigin !== config.origin.replace(/^http:/, 'https:')) return null;\n  const path = parts[2] || '/';\n  const segments = [];\n  for (const segment of path.split('/')) {\n    const dot = segment.replace(/%2e/gi, '.');\n    if (!dot || dot === '.') continue;\n    if (dot === '..') { segments.pop(); continue; }\n    if (/%2f|%5c/i.test(segment)) return null;\n    segments.push(segment);\n  }\n  const pathname = '/' + segments.join('/');\n  return normalizedOrigin + pathname + (pathname !== '/' && path.endsWith('/') ? '/' : '') + (parts[3] || '');\n}\nfunction pageKey(url) {\n  const [path, query = ''] = url.split(/\\?(.*)/s);\n  const parameters = query.split('&').filter(Boolean).filter(value =>\n    !/^(utm_.*|gad_.*|gclid|gbraid|wbraid|fbclid|msclkid)$/i.test(value.split('=')[0])).sort();\n  return path.replace(/\\/+$/, '') + (parameters.length ? '?' + parameters.join('&') : '');\n}\nfunction outputItems(name) {\n  const node = $(name);\n  if (!node.isExecuted) return [];\n  const result = [];\n  for (let run = 0; ; run++) {\n    let items;\n    try { items = node.all(0, run); } catch { break; }\n    if (!items.length) break;\n    result.push(...items);\n  }\n  return result;\n}\nconst config = $(\"⚙️ Workflow Config (修改网站入口)\").first().json;\nconst pages = [{url: config.targetUrl, lastmod: null}];\nif (config.wholeWebsite) pages.push({url: config.origin + '/', lastmod: null});\nconst sitemaps = outputItems('Collect sitemap entries');\nfor (const sitemap of sitemaps) {\n  for (const entry of sitemap.json.pages) {\n    const url = websiteUrl(entry?.loc, config);\n    if (url) pages.push({url, lastmod: typeof entry.lastmod === 'string' ? entry.lastmod : null});\n  }\n}\nreturn [{json: {pages, sitemapCount: pages.length - (config.wholeWebsite ? 2 : 1),\n  failedSitemapCount: sitemaps.filter(item => item.json.failed).length}}];"
       },
       "id": "extract-all-urls-node",
       "name": "Extract All Sitemap URLs",
@@ -222,7 +147,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const config = $('⚙️ Workflow Config (修改网站入口)').first().json;\nconst targetHostname = config.targetHostname;\nconst robotsNodeData = $('Parse robots.txt Rules').first()?.json || {};\nconst robotsRules = robotsNodeData.rules || robotsNodeData.disallowRegexes || [];\nconst userExcludePaths = config.excludePaths || [];\nconst recheckIntervalHours = config.recheckIntervalHours || 168; // 默认7天\n\nlet crawlIndex = {};\ntry {\n  const rawIndex = $('Fetch Crawl Index').first()?.json;\n  if (rawIndex && typeof rawIndex === 'object' && !rawIndex.error && !rawIndex.statusCode) {\n    for (const [k, v] of Object.entries(rawIndex)) {\n      crawlIndex[k.replace(/\\/+$/, '')] = v;\n    }\n  }\n} catch (e) {\n  crawlIndex = {};\n}\n\nconst incomingItems = $input.all();\nconst validUrls = [];\nconst seenUrlsInBatch = new Set();\nconst redirectsFiltered = [];\nconst blockedByRobots = [];\nconst blockedStatic = [];\nconst unchangedSkipped = [];\n\n\nfor (const item of incomingItems) {\n  const rawUrl = (item.json.url || '').trim();\n  const key = rawUrl.replace(/\\/+$/, '');\n  const lastmod = item.json.lastmod || null;\n  if (!rawUrl) continue;\n\n  try {\n    const match = rawUrl.match(/^https?:\\/\\/([^\\/\\?]+)(\\/[^\\?]*)?(\\?.*)?$/i);\n    if (!match) continue;\n\n    const hostname = (match[1] || '').toLowerCase().replace(/:(80|443)$/, '');\n    const pathname = match[2] || '/';\n    const search = match[3] || '';\n\n    // 1. 严格域名限制 (Strict Domain Boundary)\n    if (!robotsNodeData.available || hostname !== targetHostname) continue;\n\n    // 2. 静态与系统资源过滤\n    if (/\\.(png|jpg|jpeg|gif|svg|webp|pdf|zip|mp4|css|js|woff|woff2|ico|xml|rss|atom|json|txt)$/i.test(pathname)) continue;\n    if (/blog-feed|sitemap|robots\\.txt/i.test(pathname)) continue;\n\n    // 3. 用户自定义路径黑名单 (Config 动态输入，零硬编码)\n    let isUserExcluded = false;\n    for (const pattern of userExcludePaths) {\n      if (!pattern) continue;\n      if (pathname.includes(pattern) || new RegExp(pattern, 'i').test(pathname)) {\n        redirectsFiltered.push({\n          url: rawUrl,\n          reason: `Matched user exclude pattern: \"${pattern}\"`\n        });\n        isUserExcluded = true;\n        break;\n      }\n    }\n    if (isUserExcluded) continue;\n\n    // 4. 网关即时去重\n    if (seenUrlsInBatch.has(key)) continue;\n    seenUrlsInBatch.add(key);\n\n    // 5. robots.txt RFC 9309 规范判定 (特异度最长规则优先，等长 Allow 优先)\n    const pathAndQuery = pathname + search;\n    let bestMatch = null;\n\n    for (const rule of robotsRules) {\n      const pattern = typeof rule === 'string' ? rule : rule.pattern;\n      const type = typeof rule === 'string' ? 'disallow' : rule.type;\n      const len = typeof rule === 'string' ? pattern.length : (rule.length || 0);\n\n      try {\n        if (new RegExp(pattern).test(pathAndQuery)) {\n          if (!bestMatch || len > bestMatch.len) {\n            bestMatch = { type, len, pattern };\n          } else if (len === bestMatch.len && type === 'allow') {\n            bestMatch = { type, len, pattern };\n          }\n        }\n      } catch (e) {}\n    }\n\n    if (bestMatch && bestMatch.type === 'disallow') {\n      blockedByRobots.push({ url: rawUrl, reason: `Disallowed by robots.txt rule: \"${bestMatch.pattern}\"` });\n      continue;\n    }\n\n    // 6. 【三级增量决策体系 (Three-Tier Incremental Engine)】\n    const indexedInfo = crawlIndex[key];\n    let shouldCrawl = true;\n    let skipReason = '';\n\n    if (indexedInfo && indexedInfo.fileName && indexedInfo.hash) {\n      if (lastmod && indexedInfo.lastmod) {\n        if (lastmod <= indexedInfo.lastmod) {\n          shouldCrawl = false;\n          skipReason = `Sitemap lastmod unchanged (${lastmod} <= ${indexedInfo.lastmod})`;\n        }\n      } else {\n        const lastCrawlMs = indexedInfo.lastCrawlTime ? new Date(indexedInfo.lastCrawlTime).getTime() : 0;\n        const hoursPassed = (Date.now() - lastCrawlMs) / (1000 * 60 * 60);\n        if (hoursPassed < recheckIntervalHours) {\n          shouldCrawl = false;\n          skipReason = `No lastmod provided; crawled ${Math.round(hoursPassed)}h ago (within ${recheckIntervalHours}h verification TTL)`;\n        } else {\n          shouldCrawl = true;\n        }\n      }\n    }\n\n    if (!shouldCrawl) {\n      unchangedSkipped.push({\n        url: rawUrl,\n        lastmod: lastmod,\n        indexedLastmod: indexedInfo?.lastmod,\n        reason: skipReason\n      });\n      continue;\n    }\n\n    validUrls.push({\n      url: rawUrl,\n      lastmod: lastmod,\n      hostname: hostname,\n      pathname: pathname,\n      isRecheck: !!(indexedInfo && indexedInfo.hash)\n    });\n  } catch (err) {}\n}\n\n// 7. 【线上删除页面探查 (Stale Webpage Detection)】\n\nconst queued = validUrls.slice(0, config.limit);\nreturn [{ json: {\n  urlsToCrawlCount: queued.length,\n  validUrls: queued,\n  diagnostics: { ...incomingItems[0]?.json.discovery, redirectsFiltered, unchangedSkipped, blockedByRobots, blockedStatic },\n  failureCode: robotsNodeData.available ? null : 'robots-unavailable'\n} }];"
+        "jsCode": "function websiteUrl(value, config, base = config.targetUrl) {\n  if (typeof value !== 'string') return null;\n  let url = value.trim().split('#')[0].replace(/&amp;/gi, '&');\n  if (!url || /[\\s\\\\]/.test(url)) return null;\n  if (url.startsWith('//')) url = base.split(':')[0] + ':' + url;\n  if (!/^[a-z][a-z0-9+.-]*:/i.test(url)) {\n    const [, origin, path = '/'] = base.match(/^(https?:\\/\\/[^/?#]+)(\\/[^?#]*)?/i) || [];\n    if (!origin) return null;\n    url = origin + (url.startsWith('/') ? url : url.startsWith('?') ? path + url :\n      path.slice(0, path.lastIndexOf('/') + 1) + url);\n  }\n  const parts = url.match(/^(https?:\\/\\/[^/?#]+)(\\/[^?#]*)?(\\?[^#]*)?$/i);\n  if (!parts) return null;\n  const origin = parts[1].toLowerCase();\n  const normalizedOrigin = origin.replace(origin.startsWith('https:') ? /:443$/ : /:80$/, '');\n  if (normalizedOrigin !== config.origin && normalizedOrigin !== config.origin.replace(/^http:/, 'https:')) return null;\n  const path = parts[2] || '/';\n  const segments = [];\n  for (const segment of path.split('/')) {\n    const dot = segment.replace(/%2e/gi, '.');\n    if (!dot || dot === '.') continue;\n    if (dot === '..') { segments.pop(); continue; }\n    if (/%2f|%5c/i.test(segment)) return null;\n    segments.push(segment);\n  }\n  const pathname = '/' + segments.join('/');\n  return normalizedOrigin + pathname + (pathname !== '/' && path.endsWith('/') ? '/' : '') + (parts[3] || '');\n}\nfunction pageKey(url) {\n  const [path, query = ''] = url.split(/\\?(.*)/s);\n  const parameters = query.split('&').filter(Boolean).filter(value =>\n    !/^(utm_.*|gad_.*|gclid|gbraid|wbraid|fbclid|msclkid)$/i.test(value.split('=')[0])).sort();\n  return path.replace(/\\/+$/, '') + (parameters.length ? '?' + parameters.join('&') : '');\n}\nconst config = $(\"⚙️ Workflow Config (修改网站入口)\").first().json;\nconst robots = $('Parse robots.txt Rules').first().json;\nconst previous = $runIndex > 0 ? $('Robots.txt & Gateway Filter').first(0, $runIndex - 1).json : null;\nconst seen = new Set(previous?.seen || []);\nconst incoming = $input.first().json;\nconst rules = robots.rules.map(rule => ({ ...rule, regex: new RegExp(rule.pattern) }))\n  .sort((a, b) => b.length - a.length || Number(b.type === 'allow') - Number(a.type === 'allow'));\nconst urls = [];\nlet blockedByRobotsCount = previous?.diagnostics.blockedByRobotsCount || 0;\nfor (const page of incoming.pages || []) {\n  const url = websiteUrl(page.url, config);\n  if (!url || !robots.available) continue;\n  const [, pathname = '/', query = ''] = url.match(/^https?:\\/\\/[^/?#]+(\\/[^?#]*)?(\\?.*)?$/i);\n  if (/\\.(png|jpg|jpeg|gif|svg|webp|pdf|zip|mp4|css|js|woff|woff2|ico|xml|rss|atom|json|txt)$/i.test(pathname)) continue;\n  const key = pageKey(url);\n  if (seen.has(key)) continue;\n  if (rules.find(rule => rule.regex.test(pathname + query))?.type === 'disallow') {\n    blockedByRobotsCount++;\n    continue;\n  }\n  seen.add(key);\n  urls.push({url, lastmod: page.lastmod || null});\n}\nconst diagnostics = {\n  sitemapCount: previous?.diagnostics.sitemapCount ?? incoming.sitemapCount ?? 0,\n  failedSitemapCount: previous?.diagnostics.failedSitemapCount ?? incoming.failedSitemapCount ?? 0,\n  rawDiscoveredCount: (previous?.diagnostics.rawDiscoveredCount || 0) + (incoming.pages?.length || 0),\n  uniquePagesCount: seen.size,\n  blockedByRobotsCount\n};\nreturn [{json: {validUrls: urls, seen: [...seen], urlsToCrawlCount: urls.length,\n  totalQueued: (previous?.totalQueued || 0) + urls.length, diagnostics,\n  failureCode: robots.available ? null : 'robots-unavailable'}}];"
       },
       "id": "gateway-filter-node",
       "name": "Robots.txt & Gateway Filter",
@@ -236,7 +161,9 @@
     {
       "parameters": {
         "batchSize": 1,
-        "options": {}
+        "options": {
+          "reset": "={{ $json.startBatch === true }}"
+        }
       },
       "id": "split-in-batches-node",
       "name": "Split In Batches (1 URL)",
@@ -281,7 +208,7 @@
     },
     {
       "parameters": {
-        "jsCode": "function scopedUrl(value, config) {\n  let href = (value || '').trim().split('#')[0];\n  if (!href || /[\\s\\\\]/.test(href)) return null;\n  if (href.startsWith('//')) href = config.origin.split(':')[0] + ':' + href;\n  if (!/^[a-z][a-z0-9+.-]*:/i.test(href)) {\n    const seedPath = config.targetUrl.match(/^https?:\\/\\/[^/?#]+(\\/[^?#]*)?/i)?.[1] || '/';\n    const path = href.startsWith('/') ? href\n      : href.startsWith('?') ? seedPath + href\n      : seedPath.slice(0, seedPath.lastIndexOf('/') + 1) + href;\n    href = config.origin + path;\n  }\n  const parts = href.match(/^(https?:\\/\\/[^/?#]+)(\\/[^?#]*)?(\\?[^#]*)?$/i);\n  if (!parts) return null;\n  const origin = parts[1].toLowerCase().replace(/:(80|443)$/, '');\n  if (origin !== config.origin && origin !== config.origin.replace(/^http:/, 'https:')) return null;\n\n  const inputPath = parts[2] || '/';\n  const segments = [];\n  for (const segment of inputPath.split('/')) {\n    const dot = segment.replace(/%2e/gi, '.');\n    if (!dot || dot === '.') continue;\n    if (dot === '..') { segments.pop(); continue; }\n    if (/%2f|%5c/i.test(segment)) return null;\n    segments.push(segment);\n  }\n  const pathname = '/' + segments.join('/');\n  if (config.section\n        ? config.scopePath !== '/' && pathname !== config.scopePath && !pathname.startsWith(config.scopePath + '/')\n        : pathname !== config.scopePath || (parts[3] || '') !== (config.targetUrl.match(/\\?.*$/)?.[0] || ''))\n    return null;\n  return origin + pathname + (pathname !== '/' && inputPath.endsWith('/') ? '/' : '') + (parts[3] || '');\n}\n\n// 纯 JS 确定性 Hash 函数\nfunction generateContentHash(str) {\n  let h1 = 0xdeadbeef, h2 = 0x41c6ce57;\n  for (let i = 0; i < str.length; i++) {\n    const ch = str.charCodeAt(i);\n    h1 = Math.imul(h1 ^ ch, 2654435761);\n    h2 = Math.imul(h2 ^ ch, 1597334677);\n  }\n  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507);\n  h1 ^= Math.imul(h2 ^ (h2 >>> 13), 3266489909);\n  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507);\n  h2 ^= Math.imul(h1 ^ (h1 >>> 13), 3266489909);\n  return (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(16).padStart(12, '0');\n}\n\n// 【URL is Identity: 基于标准 URL 对象生成永久稳定的文件名】\nfunction generateStableFileName(siteName, rawUrl) {\n  let pathname = '';\n  let search = '';\n  try {\n    const u = new URL(rawUrl);\n    pathname = u.pathname || '';\n    search = u.search || '';\n  } catch (e) {\n    try {\n      const parts = rawUrl.replace(/^https?:\\/\\/[^\\/]+/, '').split('?');\n      pathname = parts[0] || '';\n      search = parts[1] ? ('?' + parts[1]) : '';\n    } catch (e2) {\n      pathname = '';\n    }\n  }\n\n  let slug = pathname.replace(/^\\/+|\\/+$/g, '').replace(/[^a-zA-Z0-9_-]/g, '-').trim();\n  if (!slug) slug = 'index';\n  if (search) {\n    const q = search.replace(/[^a-zA-Z0-9_-]/g, '-').substring(0, 30);\n    slug = slug + q;\n  }\n  if (slug.length > 80) slug = slug.substring(0, 80);\n  return `raw/${siteName}/${slug}.md`;\n}\n\n// 【通用动态内容降噪与去重算法 (Dynamic & Content-Agnostic Cleaner)】\n// 彻底剔除任何特定网站的硬编码文本匹配，完全基于标准语义标签、链接密度与信息论启发式算法\nfunction cleanMarkdownDynamically(md) {\n  if (!md || typeof md !== 'string') return '';\n\n  // 1. 动态剥离页内锚点跳转链接 (负向后行断言 (?<!\\!) 确保绝不破坏图片 ![] 语法)\n  md = md.replace(/(?<!\\!)\\[[^\\]]*\\]\\([^)]*#[^)]*\\)/gi, '');\n\n  // 2. 动态剥离空文本链接 (负向后行断言 (?<!\\!) 确保无 alt 的 Markdown 图片 ![](url) 完好保留)\n  md = md.replace(/(?<!\\!)\\[\\s*\\]\\([^)]*\\)/gi, '');\n\n  // 3. 动态链接密度剪枝算法 (Link Density Filter - 浏览器阅读模式核心算法)\n  // 核心原理：正文的链接密度通常 < 0.25；而分类目录、导航菜单、标签云的链接密度 > 0.65\n  const lines = md.split('\\n');\n  const cleanedLines = [];\n  let i = 0;\n\n  while (i < lines.length) {\n    const line = lines[i];\n    // 探测 Markdown 列表项起始 (*, -, +)\n    if (/^\\s*[\\*\\-\\+]\\s+/.test(line)) {\n      const listBlock = [];\n      while (i < lines.length && (/^\\s*[\\*\\-\\+]\\s+/.test(lines[i]) || (lines[i].trim() && lines[i].startsWith('  ')))) {\n        listBlock.push(lines[i]);\n        i++;\n      }\n      // 计算当前列表块的 Link Density\n      const blockText = listBlock.join(' ');\n      const totalLen = blockText.trim().length;\n      const links = blockText.match(/\\[([^\\]]*)\\]\\([^)]*\\)/g) || [];\n\n      let linkTextLen = 0;\n      for (const link of links) {\n        const m = link.match(/\\[([^\\]]*)\\]/);\n        if (m && m[1]) linkTextLen += m[1].length;\n      }\n\n      const linkDensity = totalLen > 0 ? (linkTextLen / totalLen) : 0;\n\n      // 如果列表包含 3 个以上链接且链接字符占比超过 65%，判定为高密度导航/目录块，动态剔除\n      if (links.length >= 3 && linkDensity > 0.65) {\n        continue;\n      } else {\n        cleanedLines.push(...listBlock);\n        continue;\n      }\n    } else {\n      cleanedLines.push(line);\n      i++;\n    }\n  }\n\n  // 4. 连续重复行动态去重 (Consecutive Duplicate Line De-duplication)\n  // 消除轮播图、跑马灯、响应式重复渲染导致的同构行\n  const dedupedLines = [];\n  for (const line of cleanedLines) {\n    const trimmed = line.trim();\n    if (trimmed && dedupedLines.length > 0 && dedupedLines[dedupedLines.length - 1].trim() === trimmed) {\n      continue;\n    }\n    dedupedLines.push(line);\n  }\n\n  // 5. 空行动态规整 (最多保留两个换行)\n  return dedupedLines.join('\\n').replace(/\\n{3,}/g, '\\n\\n').trim();\n}\n\nconst config = $('⚙️ Workflow Config (修改网站入口)').first().json;\nconst siteName = config.siteName || 'custom_site';\nconst targetHostname = config.targetHostname;\n\n\nconst enrichedItems = [];\n\nfor (const item of $input.all()) {\n  const data = item.json;\n  const resultObj = (data.results && Array.isArray(data.results) && data.results[0]) ? data.results[0] : data;\n  const requestedUrl = $('Split In Batches (1 URL)').itemMatching(0).json.url;\n  const url = resultObj.redirected_url || resultObj.url || data.url || requestedUrl;\n  if (!scopedUrl(url, config)) {\n    enrichedItems.push({ json: { failedCrawl: {\n      failedUrl: requestedUrl, errorMessage: 'The page redirected outside the selected crawl scope.',\n      failedAt: new Date().toISOString()\n    } } });\n    continue;\n  }\n  let lastmod = item.json.lastmod || null;\n\n  // 1. 拦截 HTTP 400+/500 异常页面，绝不把死链存入 Obsidian\n  if ((resultObj.status_code && resultObj.status_code >= 400) || resultObj.success === false) {\n    enrichedItems.push({ json: { failedCrawl: {\n      failedUrl: url,\n      errorMessage: resultObj.error_message || 'Crawl failed',\n      failedAt: new Date().toISOString()\n    } } });\n    continue;\n  }\n\n  // 2. 自动从响应头补全 Last-Modified\n  if (!lastmod) {\n    const respHeaders = resultObj.response_headers || {};\n    const srvMod = respHeaders['last-modified'] || respHeaders['Last-Modified'];\n    if (srvMod) {\n      try {\n        lastmod = new Date(srvMod).toISOString().split('T')[0];\n      } catch (e) {\n        lastmod = srvMod;\n      }\n    }\n  }\n\n  // 3. 正文 Markdown 提取与纯动态清洗去噪（优先采用未过滤图片与嵌入媒体的 raw_markdown）\n  let rawMarkdown = '';\n  if (resultObj.markdown) {\n    if (typeof resultObj.markdown === 'string') {\n      rawMarkdown = resultObj.markdown;\n    } else if (typeof resultObj.markdown === 'object') {\n      rawMarkdown = resultObj.markdown.raw_markdown || resultObj.markdown.fit_markdown || '';\n    }\n  }\n  if (!rawMarkdown) {\n    rawMarkdown = resultObj.cleaned_html || resultObj.content || '';\n  }\n\n  // 执行纯动态清洗（无任何硬编码字符串）\n  const cleanedMarkdown = cleanMarkdownDynamically(rawMarkdown);\n\n  // 4. 【Title is Metadata】真实标题保存在 Frontmatter 中\n  let title = (resultObj.metadata?.title || data.metadata?.title || resultObj.title || data.title || 'Untitled Page')\n    .replace(/[\\r\\n]/g, ' ')\n    .replace(/\"/g, '\\\\\"')\n    .trim();\n  if (title.length > 120) title = title.substring(0, 120);\n\n  // 提取 Crawl4AI 探测到的 YouTube 视频或媒体并保证其在正文中呈现\n  const mediaVideos = resultObj.media?.videos || [];\n  const youtubeUrls = [];\n  for (const v of mediaVideos) {\n    const vUrl = typeof v === 'string' ? v : (v?.src || v?.url || '');\n    if (vUrl && /youtube\\.com|youtu\\.be/i.test(vUrl)) {\n      if (!youtubeUrls.includes(vUrl)) youtubeUrls.push(vUrl);\n    }\n  }\n  if (Array.isArray(resultObj.links?.external)) {\n    for (const l of resultObj.links.external) {\n      const lHref = l?.href || l?.url || '';\n      if (lHref && /youtube\\.com|youtu\\.be/i.test(lHref)) {\n        if (!youtubeUrls.includes(lHref)) youtubeUrls.push(lHref);\n      }\n    }\n  }\n\n  let extraMediaSection = '';\n  if (youtubeUrls.length > 0) {\n    const missingVideos = youtubeUrls.filter(u => !cleanedMarkdown.includes(u));\n    if (missingVideos.length > 0) {\n      extraMediaSection = '\\n\\n### 关联视频资源 (Videos)\\n' + missingVideos.map(u => `- [YouTube 视频](${u})`).join('\\n');\n    }\n  }\n\n  const finalMarkdownContent = `${cleanedMarkdown}${extraMediaSection}`;\n  const hash = generateContentHash(finalMarkdownContent);\n  const crawlTime = new Date().toISOString();\n  const fileName = generateStableFileName(siteName, url);\n\n  const enrichedMarkdown = `---` + `\\n` +\n`title: \"${title}\"` + `\\n` +\n`url: \"${url}\"` + `\\n` +\n`crawl_time: \"${crawlTime}\"` + `\\n` +\n`hash: \"${hash}\"` + `\\n` +\n`---` + `\\n\\n` +\n`# ${title}` + `\\n\\n` +\n`${finalMarkdownContent}`;\n\n  enrichedItems.push({\n    json: {\n      url,\n      title,\n      siteName,\n      hash,\n      lastmod,\n      fileName,\n      content: enrichedMarkdown\n    }\n  });\n}\n\nreturn enrichedItems;"
+        "jsCode": "function websiteUrl(value, config, base = config.targetUrl) {\n  if (typeof value !== 'string') return null;\n  let url = value.trim().split('#')[0].replace(/&amp;/gi, '&');\n  if (!url || /[\\s\\\\]/.test(url)) return null;\n  if (url.startsWith('//')) url = base.split(':')[0] + ':' + url;\n  if (!/^[a-z][a-z0-9+.-]*:/i.test(url)) {\n    const [, origin, path = '/'] = base.match(/^(https?:\\/\\/[^/?#]+)(\\/[^?#]*)?/i) || [];\n    if (!origin) return null;\n    url = origin + (url.startsWith('/') ? url : url.startsWith('?') ? path + url :\n      path.slice(0, path.lastIndexOf('/') + 1) + url);\n  }\n  const parts = url.match(/^(https?:\\/\\/[^/?#]+)(\\/[^?#]*)?(\\?[^#]*)?$/i);\n  if (!parts) return null;\n  const origin = parts[1].toLowerCase();\n  const normalizedOrigin = origin.replace(origin.startsWith('https:') ? /:443$/ : /:80$/, '');\n  if (normalizedOrigin !== config.origin && normalizedOrigin !== config.origin.replace(/^http:/, 'https:')) return null;\n  const path = parts[2] || '/';\n  const segments = [];\n  for (const segment of path.split('/')) {\n    const dot = segment.replace(/%2e/gi, '.');\n    if (!dot || dot === '.') continue;\n    if (dot === '..') { segments.pop(); continue; }\n    if (/%2f|%5c/i.test(segment)) return null;\n    segments.push(segment);\n  }\n  const pathname = '/' + segments.join('/');\n  return normalizedOrigin + pathname + (pathname !== '/' && path.endsWith('/') ? '/' : '') + (parts[3] || '');\n}\nfunction pageKey(url) {\n  const [path, query = ''] = url.split(/\\?(.*)/s);\n  const parameters = query.split('&').filter(Boolean).filter(value =>\n    !/^(utm_.*|gad_.*|gclid|gbraid|wbraid|fbclid|msclkid)$/i.test(value.split('=')[0])).sort();\n  return path.replace(/\\/+$/, '') + (parameters.length ? '?' + parameters.join('&') : '');\n}\n\n// 纯 JS 确定性 Hash 函数\nfunction generateContentHash(str) {\n  let h1 = 0xdeadbeef, h2 = 0x41c6ce57;\n  for (let i = 0; i < str.length; i++) {\n    const ch = str.charCodeAt(i);\n    h1 = Math.imul(h1 ^ ch, 2654435761);\n    h2 = Math.imul(h2 ^ ch, 1597334677);\n  }\n  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507);\n  h1 ^= Math.imul(h2 ^ (h2 >>> 13), 3266489909);\n  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507);\n  h2 ^= Math.imul(h1 ^ (h1 >>> 13), 3266489909);\n  return (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(16).padStart(12, '0');\n}\n\n// 【URL is Identity: 基于标准 URL 对象生成永久稳定的文件名】\n\nfunction fileNameForPage(site, url) {\n  const index = $('Fetch Crawl Index').first()?.json || {};\n  const stored = index[url.replace(/\\/+$/, '')]?.fileName;\n  const prefix = 'raw/' + site + '/';\n  if (typeof stored === 'string' && stored.startsWith(prefix) &&\n      /^[A-Za-z0-9_-]{1,80}\\.md$/.test(stored.slice(prefix.length))) return stored;\n  const path = url.replace(/^https?:\\/\\/[^/]+/, '').split('?')[0];\n  const slug = path.replace(/^\\/+|\\/+$/g, '').replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 60) || 'index';\n  return prefix + slug + '-' + generateContentHash(pageKey(url)) + '.md';\n}\n\n// 【通用动态内容降噪与去重算法 (Dynamic & Content-Agnostic Cleaner)】\n// 彻底剔除任何特定网站的硬编码文本匹配，完全基于标准语义标签、链接密度与信息论启发式算法\nfunction cleanMarkdownDynamically(md) {\n  if (!md || typeof md !== 'string') return '';\n\n  // 1. 动态剥离页内锚点跳转链接 (负向后行断言 (?<!\\!) 确保绝不破坏图片 ![] 语法)\n  md = md.replace(/(?<!\\!)\\[[^\\]]*\\]\\([^)]*#[^)]*\\)/gi, '');\n\n  // 2. 动态剥离空文本链接 (负向后行断言 (?<!\\!) 确保无 alt 的 Markdown 图片 ![](url) 完好保留)\n  md = md.replace(/(?<!\\!)\\[\\s*\\]\\([^)]*\\)/gi, '');\n\n  // 3. 动态链接密度剪枝算法 (Link Density Filter - 浏览器阅读模式核心算法)\n  // 核心原理：正文的链接密度通常 < 0.25；而分类目录、导航菜单、标签云的链接密度 > 0.65\n  const lines = md.split('\\n');\n  const cleanedLines = [];\n  let i = 0;\n\n  while (i < lines.length) {\n    const line = lines[i];\n    // 探测 Markdown 列表项起始 (*, -, +)\n    if (/^\\s*[\\*\\-\\+]\\s+/.test(line)) {\n      const listBlock = [];\n      while (i < lines.length && (/^\\s*[\\*\\-\\+]\\s+/.test(lines[i]) || (lines[i].trim() && lines[i].startsWith('  ')))) {\n        listBlock.push(lines[i]);\n        i++;\n      }\n      // 计算当前列表块的 Link Density\n      const blockText = listBlock.join(' ');\n      const totalLen = blockText.trim().length;\n      const links = blockText.match(/\\[([^\\]]*)\\]\\([^)]*\\)/g) || [];\n\n      let linkTextLen = 0;\n      for (const link of links) {\n        const m = link.match(/\\[([^\\]]*)\\]/);\n        if (m && m[1]) linkTextLen += m[1].length;\n      }\n\n      const linkDensity = totalLen > 0 ? (linkTextLen / totalLen) : 0;\n\n      // 如果列表包含 3 个以上链接且链接字符占比超过 65%，判定为高密度导航/目录块，动态剔除\n      if (links.length >= 3 && linkDensity > 0.65) {\n        continue;\n      } else {\n        cleanedLines.push(...listBlock);\n        continue;\n      }\n    } else {\n      cleanedLines.push(line);\n      i++;\n    }\n  }\n\n  // 4. 连续重复行动态去重 (Consecutive Duplicate Line De-duplication)\n  // 消除轮播图、跑马灯、响应式重复渲染导致的同构行\n  const dedupedLines = [];\n  for (const line of cleanedLines) {\n    const trimmed = line.trim();\n    if (trimmed && dedupedLines.length > 0 && dedupedLines[dedupedLines.length - 1].trim() === trimmed) {\n      continue;\n    }\n    dedupedLines.push(line);\n  }\n\n  // 5. 空行动态规整 (最多保留两个换行)\n  return dedupedLines.join('\\n').replace(/\\n{3,}/g, '\\n\\n').trim();\n}\n\nconst config = $('⚙️ Workflow Config (修改网站入口)').first().json;\nconst siteName = config.siteName || 'custom_site';\nconst robots = $('Parse robots.txt Rules').first().json;\n\n\nconst enrichedItems = [];\n\nfor (const item of $input.all()) {\n  const data = item.json;\n  const resultObj = (data.results && Array.isArray(data.results) && data.results[0]) ? data.results[0] : data;\n  const requested = $('Split In Batches (1 URL)').itemMatching(0).json;\n  const requestedUrl = requested.url;\n  const url = websiteUrl(resultObj.redirected_url || resultObj.url || data.url || requestedUrl, config);\n  const path = url?.match(/^https?:\\/\\/[^/?#]+(.*)$/i)?.[1] || '/';\n  const rule = robots.rules.filter(rule => new RegExp(rule.pattern).test(path))\n    .sort((a, b) => b.length - a.length || Number(b.type === 'allow') - Number(a.type === 'allow'))[0];\n  if (!url || rule?.type === 'disallow') {\n    enrichedItems.push({ json: { failedCrawl: {\n      failedUrl: requestedUrl, errorMessage: 'The page redirected outside the website or to a page disallowed by robots.txt.',\n      failedAt: new Date().toISOString()\n    } } });\n    continue;\n  }\n  let lastmod = requested.lastmod || null;\n\n  // 1. 拦截 HTTP 400+/500 异常页面，绝不把死链存入 Obsidian\n  if ((resultObj.status_code && resultObj.status_code >= 400) || resultObj.success === false) {\n    enrichedItems.push({ json: { failedCrawl: {\n      failedUrl: url,\n      errorMessage: resultObj.error_message || 'Crawl failed',\n      failedAt: new Date().toISOString()\n    } } });\n    continue;\n  }\n\n  // 2. 自动从响应头补全 Last-Modified\n  if (!lastmod) {\n    const respHeaders = resultObj.response_headers || {};\n    const srvMod = respHeaders['last-modified'] || respHeaders['Last-Modified'];\n    if (srvMod) {\n      try {\n        lastmod = new Date(srvMod).toISOString().split('T')[0];\n      } catch (e) {\n        lastmod = srvMod;\n      }\n    }\n  }\n\n  // 3. 正文 Markdown 提取与纯动态清洗去噪（优先采用未过滤图片与嵌入媒体的 raw_markdown）\n  let rawMarkdown = '';\n  if (resultObj.markdown) {\n    if (typeof resultObj.markdown === 'string') {\n      rawMarkdown = resultObj.markdown;\n    } else if (typeof resultObj.markdown === 'object') {\n      rawMarkdown = resultObj.markdown.raw_markdown || resultObj.markdown.fit_markdown || '';\n    }\n  }\n  if (!rawMarkdown) {\n    rawMarkdown = resultObj.cleaned_html || resultObj.content || '';\n  }\n\n  // 执行纯动态清洗（无任何硬编码字符串）\n  const cleanedMarkdown = cleanMarkdownDynamically(rawMarkdown);\n\n  // 4. 【Title is Metadata】真实标题保存在 Frontmatter 中\n  let title = (resultObj.metadata?.title || data.metadata?.title || resultObj.title || data.title || 'Untitled Page')\n    .replace(/[\\r\\n]/g, ' ')\n    .replace(/\"/g, '\\\\\"')\n    .trim();\n  if (title.length > 120) title = title.substring(0, 120);\n\n  // 提取 Crawl4AI 探测到的 YouTube 视频或媒体并保证其在正文中呈现\n  const mediaVideos = resultObj.media?.videos || [];\n  const youtubeUrls = [];\n  for (const v of mediaVideos) {\n    const vUrl = typeof v === 'string' ? v : (v?.src || v?.url || '');\n    if (vUrl && /youtube\\.com|youtu\\.be/i.test(vUrl)) {\n      if (!youtubeUrls.includes(vUrl)) youtubeUrls.push(vUrl);\n    }\n  }\n  if (Array.isArray(resultObj.links?.external)) {\n    for (const l of resultObj.links.external) {\n      const lHref = l?.href || l?.url || '';\n      if (lHref && /youtube\\.com|youtu\\.be/i.test(lHref)) {\n        if (!youtubeUrls.includes(lHref)) youtubeUrls.push(lHref);\n      }\n    }\n  }\n\n  let extraMediaSection = '';\n  if (youtubeUrls.length > 0) {\n    const missingVideos = youtubeUrls.filter(u => !cleanedMarkdown.includes(u));\n    if (missingVideos.length > 0) {\n      extraMediaSection = '\\n\\n### 关联视频资源 (Videos)\\n' + missingVideos.map(u => `- [YouTube 视频](${u})`).join('\\n');\n    }\n  }\n\n  const links = new Set();\n  if (config.wholeWebsite) {\n    const add = value => {\n      const href = websiteUrl(value, config, url);\n      if (href) links.add(href);\n    };\n    for (const link of resultObj.links?.internal || []) add(link?.href || link?.url);\n    if (typeof resultObj.html === 'string') {\n      const anchors = /<a\\b[^>]*?\\shref\\s*=\\s*(?:\"([^\"]*)\"|'([^']*)'|([^\\s>]+))/gi;\n      for (const match of resultObj.html.matchAll(anchors)) add(match[1] ?? match[2] ?? match[3]);\n    }\n  }\n  const finalMarkdownContent = `${cleanedMarkdown}${extraMediaSection}`;\n  if (!finalMarkdownContent.trim()) {\n    enrichedItems.push({ json: {links: [...links], failedCrawl: {\n      failedUrl: requestedUrl, errorMessage: 'The page did not produce usable Markdown.',\n      failedAt: new Date().toISOString()\n    } } });\n    continue;\n  }\n  const hash = generateContentHash(finalMarkdownContent);\n  const crawlTime = new Date().toISOString();\n  const fileName = fileNameForPage(siteName, url);\n  const enrichedMarkdown = `---` + `\\n` +\n`title: \"${title}\"` + `\\n` +\n`url: \"${url}\"` + `\\n` +\n`crawl_time: \"${crawlTime}\"` + `\\n` +\n`hash: \"${hash}\"` + `\\n` +\n`---` + `\\n\\n` +\n`# ${title}` + `\\n\\n` +\n`${finalMarkdownContent}`;\n\n  enrichedItems.push({\n    json: {\n      url,\n      title,\n      siteName,\n      hash,\n      lastmod,\n      fileName,\n      links: [...links],\n      content: enrichedMarkdown\n    }\n  });\n}\n\nreturn enrichedItems;"
       },
       "id": "metadata-enrichment-node",
       "name": "Metadata & Taxonomy Enrichment",
@@ -330,7 +257,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const config = $('⚙️ Workflow Config (修改网站入口)').first().json;\nconst siteName = config.siteName || 'custom_site';\n\nlet crawlIndex = {};\ntry {\n  const rawIndex = $('Fetch Crawl Index').first()?.json;\n  if (rawIndex && typeof rawIndex === 'object' && !rawIndex.error && !rawIndex.statusCode) {\n    for (const [k, v] of Object.entries(rawIndex)) {\n      crawlIndex[k.replace(/\\/+$/, '')] = v;\n    }\n  }\n} catch (e) {\n  crawlIndex = {};\n}\n\nfunction outputItems(name) {\n  const result = [];\n  for (let run = 0; ; run++) {\n    let items;\n    try { items = $(name).all(0, run); } catch { break; }\n    if (!items.length) break;\n    result.push(...items);\n  }\n  return result;\n}\n\nconst results = outputItems('Collect Page Result');\nconst savedPages = results.map(item => item.json.saved).filter(Boolean);\nconst failedCrawls = results.map(item => item.json.failedCrawl).filter(Boolean);\nconst run = $(\"Robots.txt & Gateway Filter\").first().json;\nconst currentRun = run.diagnostics || {};\nconst duplicateLinks = currentRun.duplicateLinks || [];\nconst redirectsFiltered = currentRun.redirectsFiltered || [];\nconst unchangedSkipped = currentRun.unchangedSkipped || [];\nlet changedCount = 0;\nlet unchangedAfterCrawlCount = 0;\nconst crawledThisRun = [];\nfor (const sourceItem of savedPages) {\n  const cleanUrl = sourceItem.url.replace(/\\/+$/, '');\n  const oldHash = crawlIndex[cleanUrl]?.hash;\n  const newHash = sourceItem.hash;\n\n  if (oldHash && oldHash === newHash) {\n    unchangedAfterCrawlCount++;\n  } else {\n    changedCount++;\n  }\n\n  crawlIndex[cleanUrl] = {\n    fileName: sourceItem.fileName,\n    hash: newHash,\n    lastmod: sourceItem.lastmod || (crawlIndex[cleanUrl]?.lastmod) || null,\n    lastCrawlTime: new Date().toISOString(),\n    status: 'success'\n  };\n\n  crawledThisRun.push({\n    url: cleanUrl,\n    fileName: sourceItem.fileName,\n    title: sourceItem.title,\n    hashChanged: oldHash !== newHash,\n    status: 'success'\n  });\n}\n\nconst failedReport = [];\nfor (const f of failedCrawls) {\n  const cleanUrl = f.failedUrl.replace(/\\/+$/, '');\n  failedReport.push({\n    url: cleanUrl,\n    error: f.errorMessage,\n    failedAt: f.failedAt\n  });\n  if (crawlIndex[cleanUrl]) {\n    crawlIndex[cleanUrl].status = 'failed';\n    crawlIndex[cleanUrl].lastError = f.errorMessage;\n  }\n}\n\n// 【工业级全景审计报告 (Production Audit Report)】\nconst report = {\n  crawlTime: new Date().toISOString(),\n  siteName: siteName,\n  targetUrl: config.targetUrl,\n  failureCode: run.failureCode,\n  status: failedReport.length > 0 ? 'completed_with_errors' : ((changedCount > 0) ? 'updated_with_changes' : 'all_up_to_date'),\n  summary: {\n    totalRawDiscovered: currentRun.rawDiscoveredCount || 0,\n    sitemapDiscovered: currentRun.sitemapCount || 0,\n    homepageProbeDiscovered: currentRun.probeCount || 0,\n    uniquePagesDiscovered: currentRun.uniquePagesCount || 0,\n    blockedByRobotsCount: (currentRun.blockedByRobots || []).length,\n    blockedStaticCount: (currentRun.blockedStatic || []).length,\n    duplicateLinksMergedCount: duplicateLinks.length,\n    redirectsFilteredCount: redirectsFiltered.length,\n    unchangedSkippedCount: unchangedSkipped.length,\n    crawledThisRunCount: results.length,\n    changedCount: changedCount,\n    unchangedAfterCrawlCount: unchangedAfterCrawlCount,\n    staleDeletedCount: 0,\n    failedCount: failedReport.length,\n    totalIndexedInVault: Object.keys(crawlIndex).length\n  },\n  crawledThisRun: crawledThisRun,\n  staleUrlsDeleted: [],\n  duplicateLinksMerged: duplicateLinks,\n  redirectsFiltered: redirectsFiltered,\n  unchangedSkipped: unchangedSkipped,\n  failedUrls: failedReport\n};\n\nreturn [{\n  json: {\n    siteName: siteName,\n    hasChanges: changedCount > 0 || failedReport.length > 0,\n    indexContent: JSON.stringify(crawlIndex, null, 2),\n    reportContent: JSON.stringify(report, null, 2)\n  }\n}];"
+        "jsCode": "const config = $('⚙️ Workflow Config (修改网站入口)').first().json;\nconst siteName = config.siteName || 'custom_site';\n\nlet crawlIndex = {};\ntry {\n  const rawIndex = $('Fetch Crawl Index').first()?.json;\n  if (rawIndex && typeof rawIndex === 'object' && !rawIndex.error && !rawIndex.statusCode) {\n    for (const [k, v] of Object.entries(rawIndex)) {\n      crawlIndex[k.replace(/\\/+$/, '')] = v;\n    }\n  }\n} catch (e) {\n  crawlIndex = {};\n}\n\nfunction outputItems(name) {\n  const result = [];\n  for (let run = 0; ; run++) {\n    let items;\n    try { items = $(name).all(0, run); } catch { break; }\n    if (!items.length) break;\n    result.push(...items);\n  }\n  return result;\n}\n\nconst results = outputItems('Collect Page Result');\nconst savedPages = results.map(item => item.json.saved).filter(Boolean);\nconst failedCrawls = results.map(item => item.json.failedCrawl).filter(Boolean);\nconst run = $input.first().json;\nconst currentRun = run.diagnostics || {};\nconst duplicateLinks = currentRun.duplicateLinks || [];\nconst redirectsFiltered = currentRun.redirectsFiltered || [];\nconst unchangedSkipped = currentRun.unchangedSkipped || [];\nlet changedCount = 0;\nlet unchangedAfterCrawlCount = 0;\nconst crawledThisRun = [];\nfor (const sourceItem of savedPages) {\n  const cleanUrl = sourceItem.url.replace(/\\/+$/, '');\n  const oldHash = crawlIndex[cleanUrl]?.hash;\n  const newHash = sourceItem.hash;\n\n  if (oldHash && oldHash === newHash) {\n    unchangedAfterCrawlCount++;\n  } else {\n    changedCount++;\n  }\n\n  crawlIndex[cleanUrl] = {\n    fileName: sourceItem.fileName,\n    hash: newHash,\n    lastmod: sourceItem.lastmod || (crawlIndex[cleanUrl]?.lastmod) || null,\n    lastCrawlTime: new Date().toISOString(),\n    status: 'success'\n  };\n\n  crawledThisRun.push({\n    url: cleanUrl,\n    fileName: sourceItem.fileName,\n    title: sourceItem.title,\n    hashChanged: oldHash !== newHash,\n    status: 'success'\n  });\n}\n\nconst failedReport = [];\nfor (const f of failedCrawls) {\n  const cleanUrl = f.failedUrl.replace(/\\/+$/, '');\n  failedReport.push({\n    url: cleanUrl,\n    error: f.errorMessage,\n    failedAt: f.failedAt\n  });\n  if (crawlIndex[cleanUrl]) {\n    crawlIndex[cleanUrl].status = 'failed';\n    crawlIndex[cleanUrl].lastError = f.errorMessage;\n  }\n}\n\n// 【工业级全景审计报告 (Production Audit Report)】\nconst report = {\n  crawlTime: new Date().toISOString(),\n  siteName: siteName,\n  targetUrl: config.targetUrl,\n  failureCode: run.failureCode,\n  status: failedReport.length > 0 || currentRun.failedSitemapCount > 0 ? 'completed_with_errors' : ((changedCount > 0) ? 'updated_with_changes' : 'all_up_to_date'),\n  summary: {\n    totalRawDiscovered: currentRun.rawDiscoveredCount || 0,\n    sitemapDiscovered: currentRun.sitemapCount || 0,\n    homepageProbeDiscovered: currentRun.probeCount || 0,\n    uniquePagesDiscovered: currentRun.uniquePagesCount || 0,\n    blockedByRobotsCount: currentRun.blockedByRobotsCount || 0,\n    failedSitemapCount: currentRun.failedSitemapCount || 0,\n    blockedStaticCount: (currentRun.blockedStatic || []).length,\n    duplicateLinksMergedCount: duplicateLinks.length,\n    redirectsFilteredCount: redirectsFiltered.length,\n    unchangedSkippedCount: unchangedSkipped.length,\n    crawledThisRunCount: results.length,\n    changedCount: changedCount,\n    unchangedAfterCrawlCount: unchangedAfterCrawlCount,\n    staleDeletedCount: 0,\n    failedCount: failedReport.length,\n    totalIndexedInVault: Object.keys(crawlIndex).length\n  },\n  crawledThisRun: crawledThisRun,\n  staleUrlsDeleted: [],\n  duplicateLinksMerged: duplicateLinks,\n  redirectsFiltered: redirectsFiltered,\n  unchangedSkipped: unchangedSkipped,\n  failedUrls: failedReport\n};\n\nreturn [{\n  json: {\n    siteName: siteName,\n    hasChanges: changedCount > 0 || failedReport.length > 0,\n    indexContent: JSON.stringify(crawlIndex, null, 2),\n    reportContent: JSON.stringify(report, null, 2)\n  }\n}];"
       },
       "id": "prepare-updated-index-node",
       "name": "Prepare Updated Crawl Index",
@@ -378,7 +305,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const result = $input.first().json;\nconst { url } = $(\"Split In Batches (1 URL)\").itemMatching(0).json;\nreturn [{ json: { failedCrawl: {\n  failedUrl: url,\n  errorMessage: result.error?.message || result.message || 'Crawl request failed',\n  failedAt: new Date().toISOString()\n} } }];"
+        "jsCode": "const result = $input.first().json;\nconst { url } = $(\"Split In Batches (1 URL)\").itemMatching(0).json;\nlet links = [];\ntry {\n  links = $(\"Metadata & Taxonomy Enrichment\").itemMatching(0)?.json?.links || [];\n} catch {\n  // A request can fail before a page has been rendered.\n}\nreturn [{ json: { links, failedCrawl: {\n  failedUrl: url,\n  errorMessage: result.error?.message || result.message || 'Crawl request failed',\n  failedAt: new Date().toISOString()\n} } }];"
       },
       "id": "record-crawl-error-node",
       "name": "Record Crawl Error",
@@ -435,7 +362,7 @@
           "conditions": [
             {
               "id": "c1",
-              "leftValue": "={{ $(\"Robots.txt & Gateway Filter\").first().json.urlsToCrawlCount }}",
+              "leftValue": "={{ $json.urlsToCrawlCount }}",
               "rightValue": 0,
               "operator": {
                 "type": "number",
@@ -458,7 +385,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const urls = $(\"Robots.txt & Gateway Filter\").first().json.validUrls;\nreturn urls.map(url => ({ json: url }));"
+        "jsCode": "return $input.first().json.validUrls.map(url => ({json: {...url, startBatch: true}}));"
       },
       "id": "unpack-urls-node",
       "name": "Unpack URLs",
@@ -495,7 +422,7 @@
         384
       ],
       "parameters": {
-        "url": "http://web:8081/internal/crawl/session?version=2",
+        "url": "=http://web:8081/internal/crawl/session?version={{ $('Webhook (Crawl Trigger)').first().json.body.scope === 'section' ? 2 : 3 }}",
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
@@ -551,7 +478,7 @@
           "conditions": [
             {
               "id": "crawl-discover-section",
-              "leftValue": "={{ $(\"⚙️ Workflow Config (修改网站入口)\").first().json.section && $(\"Parse robots.txt Rules\").first().json.available && $(\"Parse robots.txt Rules\").first().json.seedAllowed }}",
+              "leftValue": "={{ $(\"⚙️ Workflow Config (修改网站入口)\").first().json.wholeWebsite && $(\"Parse robots.txt Rules\").first().json.available }}",
               "operator": {
                 "type": "boolean",
                 "operation": "true",
@@ -564,7 +491,7 @@
         "options": {}
       },
       "id": "crawl-discover-section-condition",
-      "name": "Discover section links?",
+      "name": "Discover website pages?",
       "type": "n8n-nodes-base.if",
       "typeVersion": 2,
       "position": [
@@ -574,38 +501,7 @@
     },
     {
       "parameters": {
-        "conditions": {
-          "options": {
-            "typeValidation": "strict",
-            "version": 2
-          },
-          "conditions": [
-            {
-              "id": "crawl-has-sitemap-url",
-              "leftValue": "={{ Boolean($json.sitemapUrl) }}",
-              "operator": {
-                "type": "boolean",
-                "operation": "true",
-                "singleValue": true
-              }
-            }
-          ],
-          "combinator": "and"
-        },
-        "options": {}
-      },
-      "id": "crawl-has-child-sitemap",
-      "name": "Has child sitemap?",
-      "type": "n8n-nodes-base.if",
-      "typeVersion": 2,
-      "position": [
-        1720,
-        192
-      ]
-    },
-    {
-      "parameters": {
-        "jsCode": "const result = $input.first().json;\nconst stored = result.ok === true ? $(\"Metadata & Taxonomy Enrichment\").itemMatching(0).json : null;\nconst url = $(\"Split In Batches (1 URL)\").itemMatching(0).json.url;\nreturn [{ json: {\n  page: $runIndex + 1,\n  saved: stored ? { url: stored.url, lastmod: stored.lastmod, fileName: stored.fileName, title: stored.title, hash: stored.hash } : null,\n  failedCrawl: stored ? null : result.failedCrawl || {\n    failedUrl: url, errorMessage: 'The page did not produce usable Markdown.', failedAt: new Date().toISOString()\n  }\n} }];"
+        "jsCode": "const result = $input.first().json;\nconst stored = result.ok === true ? $(\"Metadata & Taxonomy Enrichment\").itemMatching(0).json : null;\nconst url = $(\"Split In Batches (1 URL)\").itemMatching(0).json.url;\nreturn [{ json: {\n  page: $runIndex + 1,\n  links: stored?.links || result.links || [],\n  saved: stored ? { url: stored.url, lastmod: stored.lastmod, fileName: stored.fileName, title: stored.title, hash: stored.hash } : null,\n  failedCrawl: stored ? null : result.failedCrawl || {\n    failedUrl: url, errorMessage: 'The page did not produce usable Markdown.', failedAt: new Date().toISOString()\n  }\n} }];"
       },
       "id": "crawl-collect-page-result",
       "name": "Collect Page Result",
@@ -631,11 +527,15 @@
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ total: $json.urlsToCrawlCount }) }}",
+        "jsonBody": "={{ JSON.stringify({ total: $json.totalQueued }) }}",
         "options": {
           "timeout": 3000,
           "response": {
-            "response": { "fullResponse": true, "neverError": true, "responseFormat": "text" }
+            "response": {
+              "fullResponse": true,
+              "neverError": true,
+              "responseFormat": "text"
+            }
           }
         }
       },
@@ -668,7 +568,11 @@
         "options": {
           "timeout": 3000,
           "response": {
-            "response": { "fullResponse": true, "neverError": true, "responseFormat": "text" }
+            "response": {
+              "fullResponse": true,
+              "neverError": true,
+              "responseFormat": "text"
+            }
           }
         }
       },
@@ -684,23 +588,149 @@
     },
     {
       "parameters": {
-        "jsCode": "return $input.all().filter(item => item.json.statusCode !== 404);"
+        "jsCode": "if ($input.first().json.statusCode === 404) return [];\nreturn $('Robots.txt & Gateway Filter').all(0, $runIndex);"
       },
       "id": "crawl-check-session-before-fetching",
       "name": "Continue after discovery if active",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [2620, 480]
+      "position": [
+        2620,
+        480
+      ]
     },
     {
       "parameters": {
-        "jsCode": "return $input.all().filter(item => item.json.statusCode !== 404);"
+        "jsCode": "if ($input.first().json.statusCode === 404) return [];\nreturn $('Collect Page Result').all(0, $runIndex);"
       },
       "id": "crawl-check-session-after-page",
       "name": "Continue after page if active",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [4580, 390]
+      "position": [
+        4580,
+        390
+      ]
+    },
+    {
+      "name": "Plan next sitemap",
+      "id": "crawl-sitemap-frontier",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1270,
+        100
+      ],
+      "parameters": {
+        "jsCode": "function websiteUrl(value, config, base = config.targetUrl) {\n  if (typeof value !== 'string') return null;\n  let url = value.trim().split('#')[0].replace(/&amp;/gi, '&');\n  if (!url || /[\\s\\\\]/.test(url)) return null;\n  if (url.startsWith('//')) url = base.split(':')[0] + ':' + url;\n  if (!/^[a-z][a-z0-9+.-]*:/i.test(url)) {\n    const [, origin, path = '/'] = base.match(/^(https?:\\/\\/[^/?#]+)(\\/[^?#]*)?/i) || [];\n    if (!origin) return null;\n    url = origin + (url.startsWith('/') ? url : url.startsWith('?') ? path + url :\n      path.slice(0, path.lastIndexOf('/') + 1) + url);\n  }\n  const parts = url.match(/^(https?:\\/\\/[^/?#]+)(\\/[^?#]*)?(\\?[^#]*)?$/i);\n  if (!parts) return null;\n  const origin = parts[1].toLowerCase();\n  const normalizedOrigin = origin.replace(origin.startsWith('https:') ? /:443$/ : /:80$/, '');\n  if (normalizedOrigin !== config.origin && normalizedOrigin !== config.origin.replace(/^http:/, 'https:')) return null;\n  const path = parts[2] || '/';\n  const segments = [];\n  for (const segment of path.split('/')) {\n    const dot = segment.replace(/%2e/gi, '.');\n    if (!dot || dot === '.') continue;\n    if (dot === '..') { segments.pop(); continue; }\n    if (/%2f|%5c/i.test(segment)) return null;\n    segments.push(segment);\n  }\n  const pathname = '/' + segments.join('/');\n  return normalizedOrigin + pathname + (pathname !== '/' && path.endsWith('/') ? '/' : '') + (parts[3] || '');\n}\nfunction pageKey(url) {\n  const [path, query = ''] = url.split(/\\?(.*)/s);\n  const parameters = query.split('&').filter(Boolean).filter(value =>\n    !/^(utm_.*|gad_.*|gclid|gbraid|wbraid|fbclid|msclkid)$/i.test(value.split('=')[0])).sort();\n  return path.replace(/\\/+$/, '') + (parameters.length ? '?' + parameters.join('&') : '');\n}\nconst config = $(\"⚙️ Workflow Config (修改网站入口)\").first().json;\nconst robots = $('Parse robots.txt Rules').first().json;\nconst previous = $runIndex > 0 ? $('Plan next sitemap').first(0, $runIndex - 1).json : null;\nconst seen = new Set(previous?.seen || []);\nconst candidates = previous ? [...previous.pending, ...($input.first().json.sitemaps || [])] : robots.sitemapUrls;\nconst pending = [];\nconst queued = new Set();\nfor (const input of candidates) {\n  const url = websiteUrl(input, config);\n  if (url && !seen.has(url) && !queued.has(url)) {\n    pending.push(url);\n    queued.add(url);\n  }\n}\nconst sitemapUrl = pending.shift();\nif (sitemapUrl) seen.add(sitemapUrl);\nreturn [{json: {sitemapUrl, pending, seen: [...seen]}}];"
+      }
+    },
+    {
+      "name": "Has another sitemap?",
+      "id": "crawl-has-sitemap",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1500,
+        100
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "sitemap-exists",
+              "leftValue": "={{ Boolean($json.sitemapUrl) }}",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "name": "Report sitemap progress",
+      "id": "crawl-sitemap-progress",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1710,
+        100
+      ],
+      "parameters": {
+        "method": "PUT",
+        "url": "=http://web:8081/internal/crawl/raw/{{ $(\"⚙️ Workflow Config (修改网站入口)\").first().json.siteName }}/_crawl_progress.json",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-GraphRag-Crawl",
+              "value": "={{ $(\"Webhook (Crawl Trigger)\").first().json.body.crawlToken }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ discovering: true }) }}",
+        "options": {
+          "timeout": 3000,
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true,
+              "responseFormat": "text"
+            }
+          }
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "name": "Continue if sitemap discovery is active",
+      "id": "crawl-sitemap-active",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1920,
+        100
+      ],
+      "parameters": {
+        "jsCode": "if ($input.first().json.statusCode === 404) return [];\nreturn [{ json: { sitemapUrl: $('Plan next sitemap').first(0, $runIndex).json.sitemapUrl } }];"
+      }
+    },
+    {
+      "name": "Collect sitemap entries",
+      "id": "crawl-sitemap-entries",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2550,
+        100
+      ],
+      "parameters": {
+        "jsCode": "const result = $input.first().json;\nconst response = $('Fetch sitemap.xml').first(0, $runIndex).json;\nconst robots = $('Parse robots.txt Rules').first().json;\nconst status = Number(response.statusCode);\nconst absent = !robots.hasDeclaredSitemaps && $runIndex === 0 && (status === 404 || status === 410);\nconst sitemap = result.sitemapindex?.sitemap;\nconst urls = result.urlset?.url;\nreturn [{json: {\n  sitemaps: [sitemap || []].flat().map(entry => entry?.loc).filter(Boolean),\n  pages: [urls || []].flat(),\n  failed: !absent && (!(status >= 200 && status < 300) || (!result.sitemapindex && !result.urlset))\n}}];"
+      }
+    },
+    {
+      "name": "Discover linked pages",
+      "id": "crawl-linked-page-frontier",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4800,
+        500
+      ],
+      "parameters": {
+        "jsCode": "const config = $(\"⚙️ Workflow Config (修改网站入口)\").first().json;\nconst pages = config.wholeWebsite ? $input.all().flatMap(item => (item.json.links || [])\n  .map(url => ({url, lastmod: null}))) : [];\nreturn [{json: {pages}}];"
+      }
     }
   ],
   "connections": {
@@ -741,40 +771,7 @@
       "main": [
         [
           {
-            "node": "Extract Sub-Sitemaps",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Extract Sub-Sitemaps": {
-      "main": [
-        [
-          {
-            "node": "Has child sitemap?",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Fetch Child Sitemap": {
-      "main": [
-        [
-          {
-            "node": "XML to JSON (Child)",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "XML to JSON (Child)": {
-      "main": [
-        [
-          {
-            "node": "Extract All Sitemap URLs",
+            "node": "Collect sitemap entries",
             "type": "main",
             "index": 0
           }
@@ -956,54 +953,7 @@
       "main": [
         [
           {
-            "node": "Discover section links?",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Discover section links?": {
-      "main": [
-        [
-          {
-            "node": "Fetch Homepage (First-Level Discovery)",
-            "type": "main",
-            "index": 0
-          }
-        ],
-        [
-          {
-            "node": "Extract All Sitemap URLs",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Fetch Homepage (First-Level Discovery)": {
-      "main": [
-        [
-          {
-            "node": "Fetch sitemap.xml",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Has child sitemap?": {
-      "main": [
-        [
-          {
-            "node": "Fetch Child Sitemap",
-            "type": "main",
-            "index": 0
-          }
-        ],
-        [
-          {
-            "node": "Extract All Sitemap URLs",
+            "node": "Discover website pages?",
             "type": "main",
             "index": 0
           }
@@ -1011,7 +961,15 @@
       ]
     },
     "Report queued pages": {
-      "main": [[{ "node": "Continue after discovery if active", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Continue after discovery if active",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Continue after discovery if active": {
       "main": [
@@ -1028,7 +986,7 @@
       "main": [
         [
           {
-            "node": "Prepare Updated Crawl Index",
+            "node": "Discover linked pages",
             "type": "main",
             "index": 0
           }
@@ -1054,7 +1012,15 @@
       ]
     },
     "Report page checked": {
-      "main": [[{ "node": "Continue after page if active", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Continue after page if active",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Continue after page if active": {
       "main": [
@@ -1077,6 +1043,97 @@
           }
         ]
       ]
+    },
+    "Plan next sitemap": {
+      "main": [
+        [
+          {
+            "node": "Has another sitemap?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has another sitemap?": {
+      "main": [
+        [
+          {
+            "node": "Report sitemap progress",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Extract All Sitemap URLs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Report sitemap progress": {
+      "main": [
+        [
+          {
+            "node": "Continue if sitemap discovery is active",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Continue if sitemap discovery is active": {
+      "main": [
+        [
+          {
+            "node": "Fetch sitemap.xml",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Collect sitemap entries": {
+      "main": [
+        [
+          {
+            "node": "Plan next sitemap",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Discover linked pages": {
+      "main": [
+        [
+          {
+            "node": "Robots.txt & Gateway Filter",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Discover website pages?": {
+      "main": [
+        [
+          {
+            "node": "Plan next sitemap",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Extract All Sitemap URLs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     }
   },
   "nodeGroups": [],
@@ -1086,7 +1143,7 @@
     "saveDataErrorExecution": "none",
     "saveDataSuccessExecution": "none",
     "saveManualExecutions": false,
-    "executionTimeout": 300
+    "executionTimeout": -1
   },
   "staticData": null,
   "pinData": {},

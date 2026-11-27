@@ -75,7 +75,7 @@ docker compose up -d n8n crawl4ai
 
 For an existing installation, unpublish the previous workflow before publishing the bundled replacement, which uses the same webhook URL. Reuse the existing **Header Auth** credential on **Crawl4AI (/crawl)**.
 
-The crawler checks up to 25 pages under the submitted path. The progress panel shows pages checked, saved, and failed. The workflow runs for up to five minutes. Select **Cancel crawl** to release the workspace and keep pages already saved for ingestion. The bundled workflow exits when its next progress update sees that the run has ended.
+The crawler starts from the submitted URL and the homepage, reads the site's sitemaps, and follows links on the same website that its `robots.txt` rules allow. The progress panel shows how many pages are queued, checked, saved, and failed. The queue can grow as the crawler discovers links. A crawl reports a timeout if progress stops for a minute. Select **Cancel crawl** to keep any pages already saved for ingestion.
 
 ## Configuration and storage
 

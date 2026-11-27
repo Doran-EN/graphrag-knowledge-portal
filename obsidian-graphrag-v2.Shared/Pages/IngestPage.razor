@@ -1,7 +1,6 @@
 @page "/ingest"
 @namespace ObsidianGraphRag.Shared.Pages
 @using Microsoft.AspNetCore.Components.Forms
-@using ObsidianGraphRag.Shared.Services.N8n
 
 <PageTitle>Knowledge Ingest | GraphRAG Portal</PageTitle>
 
@@ -67,7 +66,7 @@
                     <span class="source-icon website-icon" aria-hidden="true"><i></i></span>
                     <div>
                         <h3 id="website-crawl-title">Crawl a website</h3>
-                        <p>Collect up to @N8nCrawlService.SectionPageLimit pages under the URL you enter.</p>
+                        <p>Discover and collect pages throughout the website.</p>
                     </div>
                     <span class="status-chip @(isN8nOnline == true ? "positive" : "")">
                         @(isN8nOnline switch { true => "Crawler online", false => "Crawler offline", null => "Checking crawler…" })
@@ -230,17 +229,33 @@
                             <div><dt>Unchanged</dt><dd>@job.UnchangedFiles</dd></div>
                             <div><dt>Entities created</dt><dd>@job.NewEntitiesCreated</dd></div>
                             <div><dt>Concepts created</dt><dd>@job.NewConceptsCreated</dd></div>
+                            @if (!job.SectionsToRetry.IsEmpty)
+                            {
+                                <div><dt>Sections to retry</dt><dd>@job.SectionsToRetry.Count</dd></div>
+                            }
                         </dl>
                     }
-                    @if (!completed && !job.IsRunning && job.CurrentStepDescription == "Stopped before completion")
+                    @if (!job.IsRunning && (job.CurrentStepDescription == "Stopped before completion" || !job.SectionsToRetry.IsEmpty))
                     {
                         <p class="source-status warning">
+                            @if (!job.SectionsToRetry.IsEmpty)
+                            {
+                                <strong>Sections to retry</strong>
+                                @foreach (var section in job.SectionsToRetry)
+                                {
+                                    <span class="failed-section">@section</span>
+                                }
+                            }
                             @if (job.FailedSection is { } failedSection)
                             {
                                 <strong>Section to retry</strong>
                                 <span class="failed-section">@failedSection</span>
                             }
-                            <span>Fix the issue shown in the logs, then run this source with <strong>New and changed content</strong> to resume.</span>
+                            @if (job.CurrentStepDescription == "Stopped before completion")
+                            {
+                                <span>Check the last error in the logs before retrying. </span>
+                            }
+                            <span>Run this source with <strong>New and changed content</strong> to retry pending sections.</span>
                         </p>
                     }
                     <details @key="job" class="activity-logs" open="@(!completed && !job.IsRunning)">

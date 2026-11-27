@@ -14,6 +14,7 @@ namespace ObsidianGraphRag.Shared.Models
         public int UpdatedFiles { get; set; }
         public string? ActiveSection { get; set; }
         public string? FailedSection { get; set; }
+        public ConcurrentQueue<string> SectionsToRetry { get; } = new();
         public int NewEntitiesCreated { get; set; }
         public int NewConceptsCreated { get; set; }
         public string CurrentStepDescription { get; set; } = string.Empty;

@@ -67,7 +67,8 @@ internal sealed class PortalCircuitAccess(AuthenticationStateProvider authentica
 
 internal sealed class CrawlAccess(IDataProtectionProvider protection, PortalAccounts accounts)
 {
-    private readonly ITimeLimitedDataProtector _protector = protection.CreateProtector("GraphRAG.PrivateCrawl.v1").ToTimeLimitedDataProtector();
+    // Callbacks also require the token to match a running crawl in the workspace.
+    private readonly IDataProtector _protector = protection.CreateProtector("GraphRAG.PrivateCrawl.v2");
 
     public string Create(string id, string url)
     {
@@ -82,7 +83,7 @@ internal sealed class CrawlAccess(IDataProtectionProvider protection, PortalAcco
             throw new ArgumentException("This website cannot be used as a crawl source.");
         if (SourceArchive.IsWebsiteArchived(accounts.WorkspacePath(id), site))
             throw new ArgumentException("This website is archived. Restore it under Managed Websites before crawling again.");
-        return _protector.Protect($"{id}\n{site}\n{url}", N8nCrawlService.GrantLifetime);
+        return _protector.Protect($"{id}\n{site}\n{url}");
     }
 
     public CrawlGrant? Read(string token)
